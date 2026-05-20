@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 type Side = "LONG" | "SHORT" | "NEUTRAL";
 type RiskMode = "SAFE" | "NORMAL" | "AGGRESSIVE";
 type DataSourceMode = "MOCK" | "BINANCE_DIRECT" | "WORKER_PROXY";
+type SymbolScanMode = "CORE" | "EXTENDED" | "CUSTOM";
 type ForwardStatus =
   | "NO_ENTRY"
   | "EXPIRED"
@@ -53,6 +54,9 @@ type AppConfig = {
   workerProxyUrl: string;
   supabaseUrl: string;
   supabaseAnonKey: string;
+  symbolScanMode: SymbolScanMode;
+  customSymbolsText: string;
+  forwardTestLimit: number;
 };
 
 type SymbolRule = {
@@ -139,7 +143,7 @@ type PersistentState = {
   updatedAt: number;
 };
 
-const SYMBOLS = [
+const CORE_SYMBOLS = [
   "BTCUSDT",
   "ETHUSDT",
   "SOLUSDT",
@@ -149,6 +153,41 @@ const SYMBOLS = [
   "ARBUSDT",
   "DOGEUSDT",
 ];
+
+const EXTENDED_SYMBOLS = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "BNBUSDT",
+  "XRPUSDT",
+  "ADAUSDT",
+  "DOGEUSDT",
+  "AVAXUSDT",
+  "LINKUSDT",
+  "DOTUSDT",
+  "TRXUSDT",
+  "MATICUSDT",
+  "NEARUSDT",
+  "ATOMUSDT",
+  "APTUSDT",
+  "ARBUSDT",
+  "OPUSDT",
+  "SUIUSDT",
+  "INJUSDT",
+  "TIAUSDT",
+  "SEIUSDT",
+  "WIFUSDT",
+  "PEPEUSDT",
+  "FETUSDT",
+  "FILUSDT",
+  "LTCUSDT",
+  "BCHUSDT",
+  "UNIUSDT",
+  "AAVEUSDT",
+  "ETCUSDT",
+];
+
+const SYMBOLS = CORE_SYMBOLS;
 
 const LOCAL_KEY = "fta_v4_standalone_state";
 
@@ -161,6 +200,28 @@ const FALLBACK_SYMBOL_RULES: Record<string, SymbolRule> = {
   OPUSDT: { symbol: "OPUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
   ARBUSDT: { symbol: "ARBUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
   DOGEUSDT: { symbol: "DOGEUSDT", minNotional: 5, minQty: 1, stepSize: 1 },
+  XRPUSDT: { symbol: "XRPUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  ADAUSDT: { symbol: "ADAUSDT", minNotional: 5, minQty: 1, stepSize: 1 },
+  AVAXUSDT: { symbol: "AVAXUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  DOTUSDT: { symbol: "DOTUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  TRXUSDT: { symbol: "TRXUSDT", minNotional: 5, minQty: 1, stepSize: 1 },
+  MATICUSDT: { symbol: "MATICUSDT", minNotional: 5, minQty: 1, stepSize: 1 },
+  NEARUSDT: { symbol: "NEARUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  ATOMUSDT: { symbol: "ATOMUSDT", minNotional: 5, minQty: 0.01, stepSize: 0.01 },
+  APTUSDT: { symbol: "APTUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  SUIUSDT: { symbol: "SUIUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  INJUSDT: { symbol: "INJUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  TIAUSDT: { symbol: "TIAUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  SEIUSDT: { symbol: "SEIUSDT", minNotional: 5, minQty: 1, stepSize: 1 },
+  WIFUSDT: { symbol: "WIFUSDT", minNotional: 5, minQty: 1, stepSize: 1 },
+  PEPEUSDT: { symbol: "PEPEUSDT", minNotional: 5, minQty: 1000, stepSize: 1000 },
+  FETUSDT: { symbol: "FETUSDT", minNotional: 5, minQty: 1, stepSize: 1 },
+  FILUSDT: { symbol: "FILUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  LTCUSDT: { symbol: "LTCUSDT", minNotional: 5, minQty: 0.001, stepSize: 0.001 },
+  BCHUSDT: { symbol: "BCHUSDT", minNotional: 5, minQty: 0.001, stepSize: 0.001 },
+  UNIUSDT: { symbol: "UNIUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  AAVEUSDT: { symbol: "AAVEUSDT", minNotional: 5, minQty: 0.01, stepSize: 0.01 },
+  ETCUSDT: { symbol: "ETCUSDT", minNotional: 5, minQty: 0.01, stepSize: 0.01 },
 };
 
 const DEFAULT_SYMBOL_RULE: SymbolRule = {
@@ -179,6 +240,9 @@ const DEFAULT_CONFIG: AppConfig = {
   workerProxyUrl: "https://dry-salad-e656.thong06021998.workers.dev",
   supabaseUrl: "https://nzkkfaougaqvxzfurtgv.supabase.co",
   supabaseAnonKey: "sb_publishable_RkQ8P-PF6KfPvD7SIOJ4Tw_BK3ntaQb",
+  symbolScanMode: "CORE",
+  customSymbolsText: CORE_SYMBOLS.join(", "),
+  forwardTestLimit: 6,
 };
 
 const SCHEMA_SQL = `
@@ -294,6 +358,34 @@ function intervalMs(tf: string) {
 function rnd(seed: number) {
   const x = Math.sin(seed) * 10000;
   return x - Math.floor(x);
+}
+
+
+function normalizeSymbolInput(raw: string) {
+  return raw
+    .split(/[\s,;]+/)
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean)
+    .map((item) => (item.endsWith("USDT") ? item : `${item}USDT`));
+}
+
+function uniqueList(items: string[]) {
+  return Array.from(new Set(items));
+}
+
+function getScanSymbols(config: AppConfig) {
+  if (config.symbolScanMode === "EXTENDED") return EXTENDED_SYMBOLS;
+  if (config.symbolScanMode === "CUSTOM") {
+    const custom = normalizeSymbolInput(config.customSymbolsText || "");
+    return custom.length ? uniqueList(custom) : CORE_SYMBOLS;
+  }
+  return CORE_SYMBOLS;
+}
+
+function getForwardTestSignals(signals: Signal[], limit: number) {
+  const uniqueSignals = keepLatestSignalPerSymbol(signals);
+  if (limit <= 0) return uniqueSignals;
+  return uniqueSignals.slice(0, limit);
 }
 
 function basePrice(symbol: string) {
@@ -450,7 +542,7 @@ function parseSymbolRules(raw: any): Record<string, SymbolRule> {
 
   for (const symbolInfo of raw.symbols) {
     if (!symbolInfo || typeof symbolInfo.symbol !== "string") continue;
-    if (!SYMBOLS.includes(symbolInfo.symbol)) continue;
+    if (!symbolInfo.symbol.endsWith("USDT")) continue;
 
     const filters = Array.isArray(symbolInfo.filters) ? symbolInfo.filters : [];
     const minNotionalFilter = filters.find((f: any) => f.filterType === "MIN_NOTIONAL" || f.filterType === "NOTIONAL");
@@ -1060,87 +1152,6 @@ function keepLatestSignalPerSymbol(inputSignals: Signal[]) {
 }
 
 
-
-function getForwardLogTime(log: ForwardLog) {
-  return log.testedAt || 0;
-}
-
-function forwardStatusRank(status: ForwardStatus) {
-  const rank: Record<ForwardStatus, number> = {
-    WAITING_ENTRY: 0,
-    NO_ENTRY: 1,
-    EXPIRED: 2,
-    ENTRY_HIT: 3,
-    BE_HIT: 4,
-    SL_HIT: 5,
-    TP1_HIT: 6,
-    TP2_HIT: 7,
-  };
-
-  return rank[status] ?? 0;
-}
-
-function pickLatestForwardLog(a: ForwardLog, b: ForwardLog) {
-  const aTime = getForwardLogTime(a);
-  const bTime = getForwardLogTime(b);
-
-  if (bTime > aTime) return b;
-  if (aTime > bTime) return a;
-
-  const aRank = forwardStatusRank(a.status);
-  const bRank = forwardStatusRank(b.status);
-
-  return bRank >= aRank ? b : a;
-}
-
-function mergeForwardLogsKeepLatest(localLogs: ForwardLog[], remoteLogs: ForwardLog[]) {
-  const merged = new Map<string, ForwardLog>();
-
-  for (const remote of remoteLogs) {
-    if (!remote?.signalId) continue;
-    merged.set(remote.signalId, remote);
-  }
-
-  for (const local of localLogs) {
-    if (!local?.signalId) continue;
-
-    const existing = merged.get(local.signalId);
-
-    if (!existing) {
-      merged.set(local.signalId, local);
-      continue;
-    }
-
-    merged.set(local.signalId, pickLatestForwardLog(existing, local));
-  }
-
-  return Array.from(merged.values());
-}
-
-function ensureForwardLogMeta(log: ForwardLog, forwardRunId: string, testedAt: number) {
-  return {
-    ...log,
-    forwardRunId: log.forwardRunId || forwardRunId,
-    testedAt: log.testedAt || testedAt,
-  };
-}
-
-function mergeSignalsLocalWins(localSignals: Signal[], remoteSignals: Signal[]) {
-  const merged = new Map<string, Signal>();
-
-  for (const remote of remoteSignals) {
-    if (!remote?.id) continue;
-    merged.set(remote.id, remote);
-  }
-
-  for (const local of localSignals) {
-    if (!local?.id) continue;
-    merged.set(local.id, local);
-  }
-
-  return keepLatestSignalPerSymbol(Array.from(merged.values()));
-}
-
 function isWinningLog(log: ForwardLog) {
   return log.status === "TP1_HIT" || log.status === "TP2_HIT" || log.status === "BE_HIT" || log.resultR > 0;
 }
@@ -1377,6 +1388,9 @@ export default function App() {
         ...saved.config,
         dataSourceMode: saved.config.dataSourceMode === "MOCK" ? "WORKER_PROXY" : saved.config.dataSourceMode,
         workerProxyUrl: saved.config.workerProxyUrl || DEFAULT_CONFIG.workerProxyUrl,
+        symbolScanMode: saved.config.symbolScanMode || DEFAULT_CONFIG.symbolScanMode,
+        customSymbolsText: saved.config.customSymbolsText || DEFAULT_CONFIG.customSymbolsText,
+        forwardTestLimit: saved.config.forwardTestLimit ?? DEFAULT_CONFIG.forwardTestLimit,
       });
     }
 
@@ -1414,6 +1428,7 @@ export default function App() {
     try {
       setApiStatus("Đang lấy dữ liệu...");
 
+      const scanSymbols = uniqueList(getScanSymbols(config));
       const [btcCandles, symbolRules] = await Promise.all([
         fetchCandles(config, "BTCUSDT", config.timeframe, 240),
         fetchSymbolRules(config),
@@ -1421,7 +1436,7 @@ export default function App() {
       const btcBias = inferBtcBias(btcCandles);
       const out: Signal[] = [];
 
-      for (const symbol of SYMBOLS) {
+      for (const symbol of scanSymbols) {
         const candles = symbol === "BTCUSDT" ? btcCandles : await fetchCandles(config, symbol, config.timeframe, 240);
         out.push(buildSignal(symbol, candles, btcBias, config, symbolRules));
       }
@@ -1434,7 +1449,7 @@ export default function App() {
         {
           id: `${Date.now()}`,
           at: Date.now(),
-          message: `Đã phân tích ${sorted.length} symbol qua ${config.dataSourceMode}. Ký quỹ được tính theo rule riêng từng symbol. Màn hình chính chỉ giữ 1 tín hiệu mới nhất cho mỗi symbol.`,
+          message: `Đã phân tích ${sorted.length}/${scanSymbols.length} symbol qua ${config.dataSourceMode}. Ký quỹ được tính theo rule riêng từng symbol. Màn hình chính chỉ giữ 1 tín hiệu mới nhất cho mỗi symbol.`,
         },
         ...auditLogs,
       ].slice(0, 100);
@@ -1457,21 +1472,21 @@ export default function App() {
     try {
       setApiStatus("Đang chạy Forward Test 1m...");
       const logs: ForwardLog[] = [];
-      const testedAt = Date.now();
-      const forwardRunId = `FT_${testedAt}`;
 
-      for (const signal of signals.slice(0, 6)) {
+      for (const signal of getForwardTestSignals(signals, config.forwardTestLimit)) {
         const candles1m = await fetchCandles(config, signal.symbol, "1m", 1000);
-        const log = executeRealForwardTest1m(signal, candles1m);
-        logs.push(ensureForwardLogMeta(log, forwardRunId, testedAt));
+        logs.push(executeRealForwardTest1m(signal, candles1m));
       }
 
-      const nextLogs = mergeForwardLogsKeepLatest(forwardLogs, logs);
+      const merged = new Map(forwardLogs.map((l) => [l.signalId, l]));
+      logs.forEach((l) => merged.set(l.signalId, l));
+
+      const nextLogs = Array.from(merged.values());
       const newAudit = [
         {
           id: `${Date.now()}`,
           at: Date.now(),
-          message: "Đã chạy Forward Test thật bằng nến 1m cho top 6 tín hiệu",
+          message: `Đã chạy Forward Test thật bằng nến 1m cho ${getForwardTestSignals(signals, config.forwardTestLimit).length} tín hiệu`,
         },
         ...auditLogs,
       ].slice(0, 100);
@@ -1494,24 +1509,27 @@ export default function App() {
 
   async function syncCloud() {
     try {
-      setSyncStatus("Đang kéo cloud và giữ local ưu tiên...");
-
-      const localSignalsSnapshot = [...signals];
-      const localForwardLogsSnapshot = [...forwardLogs];
+      setSyncStatus("Đang kéo dữ liệu cloud...");
 
       const remote = await pullSupabase(config);
+      const byId = new Map<string, Signal>();
 
-      const nextSignals = mergeSignalsLocalWins(localSignalsSnapshot, remote.signals || []);
-      const nextLogs = mergeForwardLogsKeepLatest(localForwardLogsSnapshot, remote.forwardLogs || []);
+      [...(remote.signals || []), ...signals].forEach((s) => byId.set(s.id, s));
+
+      const logById = new Map<string, ForwardLog>();
+      [...(remote.forwardLogs || []), ...forwardLogs].forEach((l) => logById.set(l.signalId, l));
+
+      const nextSignals = keepLatestSignalPerSymbol(Array.from(byId.values()));
+      const nextLogs = Array.from(logById.values());
       const nextAudit = [
-        { id: `${Date.now()}`, at: Date.now(), message: "Đồng bộ an toàn: signal trùng giữ bản local/mới nhất, Forward Log trùng signalId giữ bản testedAt mới nhất." },
+        { id: `${Date.now()}`, at: Date.now(), message: "Đã kéo dữ liệu trước khi đẩy lên cloud" },
         ...auditLogs,
       ].slice(0, 100);
 
-      setSyncStatus("Đang ghi dữ liệu đã gộp lên cloud...");
+      setSyncStatus("Đang đẩy dữ liệu cloud...");
 
       await pushSupabase(config, {
-        signals: keepLatestSignalPerSymbol(nextSignals),
+        signals: nextSignals,
         forwardLogs: nextLogs,
         auditLogs: nextAudit,
         config,
@@ -1525,7 +1543,7 @@ export default function App() {
       setLearningStats(nextLearningStats);
       setAuditLogs(nextAudit);
       persist(nextSignals, nextLogs, nextAudit);
-      setSyncStatus("Đã đồng bộ an toàn");
+      setSyncStatus("Đã đồng bộ");
     } catch (err) {
       setSyncStatus(err instanceof Error ? `Lỗi đồng bộ: ${err.message}` : "Lỗi đồng bộ");
     }
@@ -1615,24 +1633,6 @@ export default function App() {
     });
   }
 
-
-  function cleanupDuplicateSymbols() {
-    const nextSignals = keepLatestSignalPerSymbol(signals);
-    const newAudit = [
-      {
-        id: `${Date.now()}`,
-        at: Date.now(),
-        message: `Đã dọn trùng symbol trên local: ${signals.length} → ${nextSignals.length} tín hiệu.`,
-      },
-      ...auditLogs,
-    ].slice(0, 100);
-
-    setSignals(nextSignals);
-    setAuditLogs(newAudit);
-    persist(nextSignals, forwardLogs, newAudit);
-    setSyncStatus("Đã dọn trùng symbol local");
-  }
-
   function addJournal() {
     if (!journalNote.trim()) return;
 
@@ -1674,9 +1674,7 @@ export default function App() {
     setApiStatus("Chưa phân tích");
   }
 
-  const uniqueSignals = keepLatestSignalPerSymbol(signals);
-
-  const filtered = uniqueSignals.filter((s) => {
+  const filtered = signals.filter((s) => {
     const log = forwardLogs.find((l) => l.signalId === s.id);
 
     if (filter === "ENTRY") {
@@ -1694,19 +1692,19 @@ export default function App() {
     return true;
   });
 
-  const tradeable = uniqueSignals.filter((s) => {
+  const tradeable = signals.filter((s) => {
     const log = forwardLogs.find((l) => l.signalId === s.id);
     return s.action === "ENTRY_OK" && (!log || !isTerminalForwardStatus(log.status));
   }).length;
 
-  const waiting = uniqueSignals.filter((s) => {
+  const waiting = signals.filter((s) => {
     const log = forwardLogs.find((l) => l.signalId === s.id);
     return (s.action === "WAIT_PULLBACK" || s.action === "WAIT_RETEST") && (!log || !isTerminalForwardStatus(log.status));
   }).length;
 
-  const risky = uniqueSignals.filter((s) => {
+  const risky = signals.filter((s) => {
     const log = forwardLogs.find((l) => l.signalId === s.id);
-    return ["HIGH_RISK", "BAD_RR", "AVOID", "NO_TRADE"].includes(s.action) || Boolean(log && isTerminalForwardStatus(log.status));
+    return ["HIGH_RISK", "BAD_RR", "AVOID"].includes(s.action) || Boolean(log && isTerminalForwardStatus(log.status));
   }).length;
 
   
@@ -1741,8 +1739,8 @@ export default function App() {
           <b>{risky}</b>
         </Panel>
         <Panel>
-          <div className="muted">Tín hiệu đang hiển thị</div>
-          <b>{uniqueSignals.length}</b>
+          <div className="muted">Tín hiệu đã lưu</div>
+          <b>{signals.length}</b>
         </Panel>
         <Panel>
           <div className="muted">Forward log</div>
@@ -1806,12 +1804,51 @@ export default function App() {
               <option value="MOCK">MOCK</option>
             </select>
           </label>
+          <label>
+            Chế độ quét symbol
+            <select
+              value={config.symbolScanMode}
+              onChange={(e) => setConfig({ ...config, symbolScanMode: e.target.value as SymbolScanMode })}
+            >
+              <option value="CORE">Core Scan ({CORE_SYMBOLS.length})</option>
+              <option value="EXTENDED">Extended Scan ({EXTENDED_SYMBOLS.length})</option>
+              <option value="CUSTOM">Custom Scan</option>
+            </select>
+          </label>
+          <label>
+            Forward Test
+            <select
+              value={config.forwardTestLimit}
+              onChange={(e) => setConfig({ ...config, forwardTestLimit: Number(e.target.value) })}
+            >
+              <option value={6}>Top 6</option>
+              <option value={10}>Top 10</option>
+              <option value={20}>Top 20</option>
+              <option value={0}>Toàn bộ đang hiển thị</option>
+            </select>
+          </label>
         </div>
 
         <label className="fullLabel">
           URL Proxy Cloudflare Worker
           <input value={config.workerProxyUrl} onChange={(e) => setConfig({ ...config, workerProxyUrl: e.target.value })} />
         </label>
+
+        {config.symbolScanMode === "CUSTOM" && (
+          <label className="fullLabel">
+            Custom Symbols
+            <input
+              placeholder="BTCUSDT, ETHUSDT, SOLUSDT..."
+              value={config.customSymbolsText}
+              onChange={(e) => setConfig({ ...config, customSymbolsText: e.target.value })}
+            />
+          </label>
+        )}
+
+        <div className="scanSummary">
+          Đang quét <b>{getScanSymbols(config).length}</b> symbol · Forward Test:{" "}
+          <b>{config.forwardTestLimit === 0 ? "toàn bộ" : `top ${config.forwardTestLimit}`}</b>
+        </div>
 
         <div className="primaryActions">
           <button onClick={analyze}>Phân tích</button>
@@ -1839,9 +1876,6 @@ export default function App() {
                 </button>
                 <button className="secondary" onClick={clearLearningStats}>
                   Xóa Learning
-                </button>
-                <button className="secondary" onClick={cleanupDuplicateSymbols}>
-                  Dọn trùng symbol
                 </button>
                 <button className="dangerBtn soft" onClick={clearAllLocalData}>
                   Xóa toàn bộ local
@@ -1980,7 +2014,7 @@ export default function App() {
                   {log && (
                     <div className="log">
                       <b>
-                        Forward Test: {viStatus(log.status)} · {log.resultR}R · {log.testedAt ? `Test ${time(log.testedAt)}` : "Chưa có testedAt"} · Entry tính theo Entry tốt nhất
+                        Forward Test: {viStatus(log.status)} · {log.resultR}R · Entry tính theo Entry tốt nhất
                       </b>
                       {log.replay.map((line, i) => (
                         <div key={i}>

@@ -969,3 +969,21 @@ body:has(.app.dark) {
   background: #ef4444;
   color: #08111f;
 }
+
+
+
+.scanSummary {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (min-width: 901px) {
+  .configGrid {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
+}
