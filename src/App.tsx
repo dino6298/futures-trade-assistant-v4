@@ -1,15 +1,48 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 type Side = "LONG" | "SHORT" | "NEUTRAL";
 type RiskMode = "SAFE" | "NORMAL" | "AGGRESSIVE";
 type DataSourceMode = "MOCK" | "BINANCE_DIRECT" | "WORKER_PROXY";
-type ForwardStatus = "NO_ENTRY" | "EXPIRED" | "ENTRY_HIT" | "TP1_HIT" | "TP2_HIT" | "SL_HIT" | "BE_HIT" | "WAITING_ENTRY";
-type ActionLabel = "ENTRY_OK" | "WAIT_PULLBACK" | "WAIT_RETEST" | "HIGH_RISK" | "BAD_RR" | "AVOID" | "NO_TRADE";
+type ForwardStatus =
+  | "NO_ENTRY"
+  | "EXPIRED"
+  | "ENTRY_HIT"
+  | "TP1_HIT"
+  | "TP2_HIT"
+  | "SL_HIT"
+  | "BE_HIT"
+  | "WAITING_ENTRY";
+type ActionLabel =
+  | "ENTRY_OK"
+  | "WAIT_PULLBACK"
+  | "WAIT_RETEST"
+  | "HIGH_RISK"
+  | "BAD_RR"
+  | "AVOID"
+  | "NO_TRADE";
 type Grade = "A+" | "A" | "B" | "C" | "NO_TRADE";
-type MarketRegime = "TREND_UP" | "TREND_DOWN" | "SIDEWAY" | "CHOPPY" | "HIGH_VOLATILITY" | "LOW_VOLATILITY";
-type BtcBias = "BTC_BULLISH" | "BTC_BEARISH" | "BTC_NEUTRAL" | "BTC_DUMP_RISK" | "BTC_PUMP_RISK";
+type MarketRegime =
+  | "TREND_UP"
+  | "TREND_DOWN"
+  | "SIDEWAY"
+  | "CHOPPY"
+  | "HIGH_VOLATILITY"
+  | "LOW_VOLATILITY";
+type BtcBias =
+  | "BTC_BULLISH"
+  | "BTC_BEARISH"
+  | "BTC_NEUTRAL"
+  | "BTC_DUMP_RISK"
+  | "BTC_PUMP_RISK";
 
-type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
+type Candle = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
 
 type AppConfig = {
   capital: number;
@@ -57,10 +90,32 @@ type ForwardLog = {
   failureReason?: string;
 };
 
-type AuditLog = { id: string; at: number; message: string };
-type PersistentState = { signals: Signal[]; forwardLogs: ForwardLog[]; auditLogs: AuditLog[]; config: AppConfig; updatedAt: number };
+type AuditLog = {
+  id: string;
+  at: number;
+  message: string;
+};
 
-const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "LINKUSDT", "OPUSDT", "ARBUSDT", "DOGEUSDT"];
+type PersistentState = {
+  signals: Signal[];
+  forwardLogs: ForwardLog[];
+  auditLogs: AuditLog[];
+  config: AppConfig;
+  darkMode?: boolean;
+  updatedAt: number;
+};
+
+const SYMBOLS = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "BNBUSDT",
+  "LINKUSDT",
+  "OPUSDT",
+  "ARBUSDT",
+  "DOGEUSDT",
+];
+
 const LOCAL_KEY = "fta_v4_standalone_state";
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -75,13 +130,18 @@ const DEFAULT_CONFIG: AppConfig = {
 };
 
 const SCHEMA_SQL = `
-create table if not exists fta_signals (
+drop table if exists fta_forward_logs cascade;
+drop table if exists fta_signals cascade;
+drop table if exists fta_settings cascade;
+drop table if exists fta_audit_logs cascade;
+
+create table fta_signals (
   signal_id text primary key,
   payload jsonb not null,
   updated_at timestamptz default now()
 );
 
-create table if not exists fta_forward_logs (
+create table fta_forward_logs (
   id uuid primary key default gen_random_uuid(),
   signal_id text unique,
   status text not null,
@@ -90,13 +150,13 @@ create table if not exists fta_forward_logs (
   updated_at timestamptz default now()
 );
 
-create table if not exists fta_settings (
+create table fta_settings (
   id text primary key default 'default',
   payload jsonb not null,
   updated_at timestamptz default now()
 );
 
-create table if not exists fta_audit_logs (
+create table fta_audit_logs (
   id uuid primary key default gen_random_uuid(),
   message text not null,
   payload jsonb,
@@ -130,46 +190,53 @@ export default {
     const cached = await caches.default.match(cacheKey);
     if (cached) return cached;
 
-    const binanceUrl = "https://fapi.binance.com/fapi/v1/klines?symbol=" + symbol + "&interval=" + interval + "&limit=" + limit;
+    const binanceUrl =
+      "https://fapi.binance.com/fapi/v1/klines?symbol=" +
+      symbol +
+      "&interval=" +
+      interval +
+      "&limit=" +
+      limit;
+
     const res = await fetch(binanceUrl);
 
     if (!res.ok) {
       return new Response(JSON.stringify({ error: "Binance error", status: res.status }), {
         status: 502,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
       });
     }
 
     const raw = await res.json();
-    const data = raw.map(k => ({
+    const data = raw.map((k) => ({
       time: Number(k[0]),
       open: Number(k[1]),
       high: Number(k[2]),
       low: Number(k[3]),
       close: Number(k[4]),
-      volume: Number(k[5])
+      volume: Number(k[5]),
     }));
 
     const out = new Response(JSON.stringify(data), {
       headers: {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
-        "Cache-Control": "public, max-age=15"
-      }
+        "Cache-Control": "public, max-age=15",
+      },
     });
 
     ctx.waitUntil(caches.default.put(cacheKey, out.clone()));
     return out;
-  }
+  },
 };
 `.trim();
 
 function intervalMs(tf: string) {
-  if (tf === "1m") return 60000;
-  if (tf === "5m") return 300000;
-  if (tf === "15m") return 900000;
-  if (tf === "1h") return 3600000;
-  return 60000;
+  if (tf === "1m") return 60_000;
+  if (tf === "5m") return 300_000;
+  if (tf === "15m") return 900_000;
+  if (tf === "1h") return 3_600_000;
+  return 60_000;
 }
 
 function rnd(seed: number) {
@@ -178,7 +245,16 @@ function rnd(seed: number) {
 }
 
 function basePrice(symbol: string) {
-  const map: Record<string, number> = { BTCUSDT: 100000, ETHUSDT: 3200, SOLUSDT: 170, BNBUSDT: 620, LINKUSDT: 16, OPUSDT: 2, ARBUSDT: 1.1, DOGEUSDT: 0.17 };
+  const map: Record<string, number> = {
+    BTCUSDT: 100000,
+    ETHUSDT: 3200,
+    SOLUSDT: 170,
+    BNBUSDT: 620,
+    LINKUSDT: 16,
+    OPUSDT: 2,
+    ARBUSDT: 1.1,
+    DOGEUSDT: 0.17,
+  };
   return map[symbol] || 100;
 }
 
@@ -190,7 +266,12 @@ function fmt(n: number) {
 }
 
 function time(ts: number) {
-  return new Date(ts).toLocaleString("vi-VN", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return new Date(ts).toLocaleString("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function viAction(a: ActionLabel) {
@@ -232,6 +313,10 @@ function viStatus(s: ForwardStatus) {
   return map[s];
 }
 
+function openBinanceFutures(symbol: string) {
+  window.open(`https://www.binance.com/vi/futures/${symbol}`, "_blank", "noopener,noreferrer");
+}
+
 function generateMockCandles(symbol: string, interval: string, limit = 240): Candle[] {
   const step = intervalMs(interval);
   const now = Date.now();
@@ -239,7 +324,7 @@ function generateMockCandles(symbol: string, interval: string, limit = 240): Can
   let price = basePrice(symbol);
   const candles: Candle[] = [];
 
-  for (let i = 0; i < limit; i++) {
+  for (let i = 0; i < limit; i += 1) {
     const t = start + i * step;
     const drift = (rnd(t / step + symbol.charCodeAt(0)) - 0.49) * 0.006;
     const wick = rnd(t / step + symbol.length) * 0.004;
@@ -255,7 +340,23 @@ function generateMockCandles(symbol: string, interval: string, limit = 240): Can
   return candles;
 }
 
-async function fetchCandles(config: AppConfig, symbol: string, interval: string, limit = 240): Promise<Candle[]> {
+function normalizeCandle(row: any): Candle {
+  return {
+    time: Number(row.time ?? row[0]),
+    open: Number(row.open ?? row[1]),
+    high: Number(row.high ?? row[2]),
+    low: Number(row.low ?? row[3]),
+    close: Number(row.close ?? row[4]),
+    volume: Number(row.volume ?? row[5]),
+  };
+}
+
+async function fetchCandles(
+  config: AppConfig,
+  symbol: string,
+  interval: string,
+  limit = 240
+): Promise<Candle[]> {
   if (config.dataSourceMode === "MOCK") return generateMockCandles(symbol, interval, limit);
 
   const url =
@@ -265,16 +366,11 @@ async function fetchCandles(config: AppConfig, symbol: string, interval: string,
 
   const res = await fetch(url);
   if (!res.ok) throw new Error(`API lỗi ${res.status}`);
-  const raw = await res.json();
 
-  return raw.map((k: any) => ({
-    time: Number(k.time ?? k[0]),
-    open: Number(k.open ?? k[1]),
-    high: Number(k.high ?? k[2]),
-    low: Number(k.low ?? k[3]),
-    close: Number(k.close ?? k[4]),
-    volume: Number(k.volume ?? k[5]),
-  }));
+  const raw = await res.json();
+  if (!Array.isArray(raw)) throw new Error("Dữ liệu API không hợp lệ");
+
+  return raw.map(normalizeCandle);
 }
 
 function sma(values: number[], period: number) {
@@ -286,7 +382,11 @@ function ema(values: number[], period: number) {
   if (values.length < period) return undefined;
   const k = 2 / (period + 1);
   let out = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  for (let i = period; i < values.length; i++) out = values[i] * k + out * (1 - k);
+
+  for (let i = period; i < values.length; i += 1) {
+    out = values[i] * k + out * (1 - k);
+  }
+
   return out;
 }
 
@@ -294,11 +394,13 @@ function rsi(values: number[], period = 14) {
   if (values.length <= period) return undefined;
   let gain = 0;
   let loss = 0;
-  for (let i = values.length - period; i < values.length; i++) {
+
+  for (let i = values.length - period; i < values.length; i += 1) {
     const d = values[i] - values[i - 1];
     if (d >= 0) gain += d;
     else loss -= d;
   }
+
   if (loss === 0) return 100;
   return 100 - 100 / (1 + gain / loss);
 }
@@ -306,11 +408,13 @@ function rsi(values: number[], period = 14) {
 function atr(candles: Candle[], period = 14) {
   if (candles.length <= period) return undefined;
   const trs: number[] = [];
-  for (let i = 1; i < candles.length; i++) {
+
+  for (let i = 1; i < candles.length; i += 1) {
     const c = candles[i];
     const p = candles[i - 1];
     trs.push(Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close)));
   }
+
   return sma(trs, period);
 }
 
@@ -319,7 +423,9 @@ function inferRegime(candles: Candle[]): MarketRegime {
   const first = recent[0]?.close || 1;
   const last = recent[recent.length - 1]?.close || first;
   const move = (last - first) / first;
-  const avgRange = recent.reduce((s, c) => s + (c.high - c.low) / c.close, 0) / Math.max(recent.length, 1);
+  const avgRange =
+    recent.reduce((s, c) => s + (c.high - c.low) / Math.max(c.close, 1e-9), 0) /
+    Math.max(recent.length, 1);
 
   if (avgRange > 0.015) return "HIGH_VOLATILITY";
   if (Math.abs(move) < 0.004) return "SIDEWAY";
@@ -353,6 +459,7 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
   const rsi14 = rsi(closes) || 50;
 
   let side: Side = "NEUTRAL";
+
   if (btcBias === "BTC_DUMP_RISK") side = "SHORT";
   else if (btcBias === "BTC_PUMP_RISK") side = "LONG";
   else if (ema20 && ema50 && ema20 > ema50) side = "LONG";
@@ -369,8 +476,15 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
   const rr = Math.abs(tp2 - bestEntry) / Math.max(Math.abs(bestEntry - sl), 1e-9);
 
   let score = 55;
-  if ((side === "LONG" && regime === "TREND_UP") || (side === "SHORT" && regime === "TREND_DOWN")) score += 18;
-  if ((side === "LONG" && btcBias === "BTC_BULLISH") || (side === "SHORT" && btcBias === "BTC_BEARISH")) score += 10;
+
+  if ((side === "LONG" && regime === "TREND_UP") || (side === "SHORT" && regime === "TREND_DOWN")) {
+    score += 18;
+  }
+
+  if ((side === "LONG" && btcBias === "BTC_BULLISH") || (side === "SHORT" && btcBias === "BTC_BEARISH")) {
+    score += 10;
+  }
+
   if (rsi14 > 42 && rsi14 < 68) score += 8;
   if (rr >= 1.5) score += 8;
   if (regime === "HIGH_VOLATILITY" || regime === "CHOPPY") score -= 12;
@@ -392,8 +506,11 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
 
   if (blocks.length) score = Math.min(score, 54);
 
-  const grade: Grade = score >= 85 ? "A+" : score >= 75 ? "A" : score >= 65 ? "B" : score >= 55 ? "C" : "NO_TRADE";
+  const grade: Grade =
+    score >= 85 ? "A+" : score >= 75 ? "A" : score >= 65 ? "B" : score >= 55 ? "C" : "NO_TRADE";
+
   let action: ActionLabel = "NO_TRADE";
+
   if (blocks.length) action = blocks.includes("RR_XAU") ? "BAD_RR" : "AVOID";
   else if (regime === "HIGH_VOLATILITY") action = "HIGH_RISK";
   else if (score >= 75) action = "ENTRY_OK";
@@ -403,7 +520,10 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
   const maxLev = config.riskMode === "AGGRESSIVE" ? 40 : config.riskMode === "NORMAL" ? 30 : 20;
   const leverage = grade === "A+" ? maxLev : grade === "A" ? Math.min(maxLev, 25) : Math.min(maxLev, 15);
   const margin = Math.max(3, Math.min(config.capital / Math.max(config.maxActiveTrades, 1), config.capital * 0.55));
-  const riskUsdt = grade === "NO_TRADE" ? 0 : config.capital * (config.riskMode === "AGGRESSIVE" ? 0.08 : config.riskMode === "NORMAL" ? 0.055 : 0.035);
+  const riskUsdt =
+    grade === "NO_TRADE"
+      ? 0
+      : config.capital * (config.riskMode === "AGGRESSIVE" ? 0.08 : config.riskMode === "NORMAL" ? 0.055 : 0.035);
 
   const signalTime = Date.now() - (Date.now() % intervalMs(config.timeframe));
 
@@ -414,7 +534,12 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
     grade,
     score: Math.round(score),
     action,
-    setup: regime === "SIDEWAY" ? "Đảo chiều trong range" : regime === "CHOPPY" ? "Quét thanh khoản" : "Hồi theo xu hướng",
+    setup:
+      regime === "SIDEWAY"
+        ? "Đảo chiều trong range"
+        : regime === "CHOPPY"
+          ? "Quét thanh khoản"
+          : "Hồi theo xu hướng",
     currentPrice: price,
     entryLow,
     entryHigh,
@@ -435,29 +560,158 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
   };
 }
 
-function simulateForward(signal: Signal): ForwardLog {
-  const replay = [`Tạo tín hiệu lúc ${time(signal.signalTime)}.`];
+function touchEntry(signal: Signal, candle: Candle) {
+  return candle.high >= signal.entryLow && candle.low <= signal.entryHigh;
+}
+
+function touchTp(signal: Signal, candle: Candle, tp: number) {
+  if (signal.side === "LONG") return candle.high >= tp;
+  if (signal.side === "SHORT") return candle.low <= tp;
+  return false;
+}
+
+function touchSl(signal: Signal, candle: Candle, sl: number) {
+  if (signal.side === "LONG") return candle.low <= sl;
+  if (signal.side === "SHORT") return candle.high >= sl;
+  return false;
+}
+
+function executeRealForwardTest1m(signal: Signal, candles1m: Candle[]): ForwardLog {
+  const replay: string[] = [`Tạo tín hiệu lúc ${time(signal.signalTime)}.`];
 
   if (["AVOID", "BAD_RR", "NO_TRADE"].includes(signal.action)) {
     replay.push("Không vào lệnh vì tín hiệu bị chặn.");
-    return { signalId: signal.id, status: "NO_ENTRY", resultR: 0, failureReason: signal.blocks[0] || "NO_TRADE", replay };
+    return {
+      signalId: signal.id,
+      status: "NO_ENTRY",
+      resultR: 0,
+      failureReason: signal.blocks[0] || "NO_TRADE",
+      replay,
+    };
   }
 
-  const seed = signal.signalTime + signal.symbol.length + signal.score;
-  if (rnd(seed) < 0.2) {
-    replay.push("Giá chưa chạm vùng entry trước khi hết hạn.");
-    return { signalId: signal.id, status: "EXPIRED", resultR: 0, failureReason: "NO_ENTRY_EXPIRED", replay };
+  const expiryAt = signal.signalTime + 180 * 60 * 1000;
+  const candles = candles1m.filter((c) => c.time >= signal.signalTime);
+
+  if (!candles.length) {
+    replay.push("Không có đủ dữ liệu nến 1m sau thời điểm tín hiệu.");
+    return {
+      signalId: signal.id,
+      status: "NO_ENTRY",
+      resultR: 0,
+      failureReason: "MISSING_1M_DATA",
+      replay,
+    };
   }
 
-  replay.push("Giá đã chạm vùng entry.");
-  if (rnd(seed + 5) > 0.48 && signal.grade !== "C") {
-    replay.push("Chạm TP1, dời SL về hòa vốn.");
-    replay.push("Chạm TP2.");
-    return { signalId: signal.id, status: "TP2_HIT", resultR: 1.55, replay };
+  let entered = false;
+  let tp1Hit = false;
+  let breakEvenActive = false;
+
+  for (const candle of candles) {
+    if (!entered) {
+      if (candle.time > expiryAt) {
+        replay.push("Tín hiệu hết hạn trước khi giá chạm vùng entry.");
+        return {
+          signalId: signal.id,
+          status: "EXPIRED",
+          resultR: 0,
+          failureReason: "NO_ENTRY_EXPIRED",
+          replay,
+        };
+      }
+
+      if (touchEntry(signal, candle)) {
+        entered = true;
+        replay.push(`Giá đã chạm vùng entry lúc ${time(candle.time)}.`);
+      }
+
+      continue;
+    }
+
+    const slPrice = breakEvenActive ? signal.bestEntry : signal.sl;
+    const hitSl = touchSl(signal, candle, slPrice);
+    const hitTp1 = !tp1Hit && touchTp(signal, candle, signal.tp1);
+    const hitTp2 = touchTp(signal, candle, signal.tp2);
+
+    if (!tp1Hit && hitSl && (hitTp1 || hitTp2)) {
+      replay.push("Trong cùng nến 1m có cả TP và SL, hệ thống tính bảo thủ là SL.");
+      return {
+        signalId: signal.id,
+        status: "SL_HIT",
+        resultR: -1,
+        failureReason: "INTRABAR_CONSERVATIVE_SL",
+        replay,
+      };
+    }
+
+    if (hitSl) {
+      if (breakEvenActive) {
+        replay.push(`Giá quay về hòa vốn lúc ${time(candle.time)}.`);
+        return {
+          signalId: signal.id,
+          status: "BE_HIT",
+          resultR: 0.45,
+          failureReason: "TP1_THEN_BE",
+          replay,
+        };
+      }
+
+      replay.push(`Giá chạm SL lúc ${time(candle.time)}.`);
+      return {
+        signalId: signal.id,
+        status: "SL_HIT",
+        resultR: -1,
+        failureReason: "SL_HIT",
+        replay,
+      };
+    }
+
+    if (hitTp1 && !tp1Hit) {
+      tp1Hit = true;
+      breakEvenActive = true;
+      replay.push(`Giá chạm TP1 lúc ${time(candle.time)}, dời SL về hòa vốn.`);
+    }
+
+    if (hitTp2) {
+      replay.push(`Giá chạm TP2 lúc ${time(candle.time)}.`);
+      return {
+        signalId: signal.id,
+        status: "TP2_HIT",
+        resultR: 1.55,
+        replay,
+      };
+    }
   }
 
-  replay.push("Chạm SL.");
-  return { signalId: signal.id, status: "SL_HIT", resultR: -1, failureReason: "SL_INVALIDATION", replay };
+  if (tp1Hit) {
+    replay.push("Giá đã chạm TP1 nhưng chưa chạm TP2 hoặc BE.");
+    return {
+      signalId: signal.id,
+      status: "TP1_HIT",
+      resultR: 0.45,
+      replay,
+    };
+  }
+
+  if (entered) {
+    replay.push("Đã vào lệnh nhưng chưa chạm TP/SL.");
+    return {
+      signalId: signal.id,
+      status: "ENTRY_HIT",
+      resultR: 0,
+      replay,
+    };
+  }
+
+  replay.push("Giá chưa chạm vùng entry.");
+  return {
+    signalId: signal.id,
+    status: "NO_ENTRY",
+    resultR: 0,
+    failureReason: "NO_ENTRY",
+    replay,
+  };
 }
 
 function loadState(): PersistentState | null {
@@ -485,8 +739,18 @@ async function pushSupabase(config: AppConfig, state: PersistentState) {
   if (!config.supabaseUrl || !config.supabaseAnonKey) return;
 
   const base = config.supabaseUrl.replace(/\/$/, "");
-  const signalRows = state.signals.map((s) => ({ signal_id: s.id, payload: s, updated_at: new Date().toISOString() }));
-  const logRows = state.forwardLogs.map((l) => ({ signal_id: l.signalId, status: l.status, result_r: l.resultR, payload: l, updated_at: new Date().toISOString() }));
+  const signalRows = state.signals.map((s) => ({
+    signal_id: s.id,
+    payload: s,
+    updated_at: new Date().toISOString(),
+  }));
+  const logRows = state.forwardLogs.map((l) => ({
+    signal_id: l.signalId,
+    status: l.status,
+    result_r: l.resultR,
+    payload: l,
+    updated_at: new Date().toISOString(),
+  }));
 
   if (signalRows.length) {
     const res = await fetch(`${base}/rest/v1/fta_signals?on_conflict=signal_id`, {
@@ -515,14 +779,20 @@ async function pushSupabase(config: AppConfig, state: PersistentState) {
 
 async function pullSupabase(config: AppConfig): Promise<Partial<PersistentState>> {
   if (!config.supabaseUrl || !config.supabaseAnonKey) return {};
-  const base = config.supabaseUrl.replace(/\/$/, "");
 
+  const base = config.supabaseUrl.replace(/\/$/, "");
   const [signalsRes, logsRes] = await Promise.all([
-    fetch(`${base}/rest/v1/fta_signals?select=payload&order=updated_at.desc&limit=300`, { headers: supabaseHeaders(config) }),
-    fetch(`${base}/rest/v1/fta_forward_logs?select=payload&order=updated_at.desc&limit=300`, { headers: supabaseHeaders(config) }),
+    fetch(`${base}/rest/v1/fta_signals?select=payload&order=updated_at.desc&limit=300`, {
+      headers: supabaseHeaders(config),
+    }),
+    fetch(`${base}/rest/v1/fta_forward_logs?select=payload&order=updated_at.desc&limit=300`, {
+      headers: supabaseHeaders(config),
+    }),
   ]);
 
-  if (!signalsRes.ok || !logsRes.ok) throw new Error("Lỗi kéo dữ liệu Supabase. Kiểm tra SQL/RLS.");
+  if (!signalsRes.ok || !logsRes.ok) {
+    throw new Error("Lỗi kéo dữ liệu Supabase. Kiểm tra SQL/RLS.");
+  }
 
   const signalsRows = await signalsRes.json();
   const logRows = await logsRes.json();
@@ -533,7 +803,13 @@ async function pullSupabase(config: AppConfig): Promise<Partial<PersistentState>
   };
 }
 
-function Badge({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "green" | "red" | "yellow" | "blue" | "purple" | "neutral" }) {
+function Badge({
+  children,
+  tone = "neutral",
+}: {
+  children: React.ReactNode;
+  tone?: "green" | "red" | "yellow" | "blue" | "purple" | "neutral";
+}) {
   return <span className={`badge ${tone}`}>{children}</span>;
 }
 
@@ -552,34 +828,72 @@ export default function App() {
   const [showSql, setShowSql] = useState(false);
   const [showWorker, setShowWorker] = useState(false);
   const [journalNote, setJournalNote] = useState("");
+  const [darkMode, setDarkMode] = useState(false);
 
   useEffect(() => {
     const saved = loadState();
     if (!saved) return;
-    if (saved.config) setConfig({ ...DEFAULT_CONFIG, ...saved.config, dataSourceMode: saved.config.dataSourceMode === "MOCK" ? "WORKER_PROXY" : saved.config.dataSourceMode });
+
+    if (saved.config) {
+      setConfig({
+        ...DEFAULT_CONFIG,
+        ...saved.config,
+        dataSourceMode: saved.config.dataSourceMode === "MOCK" ? "WORKER_PROXY" : saved.config.dataSourceMode,
+        workerProxyUrl: saved.config.workerProxyUrl || DEFAULT_CONFIG.workerProxyUrl,
+      });
+    }
+
     setSignals(saved.signals || []);
     setForwardLogs(saved.forwardLogs || []);
     setAuditLogs(saved.auditLogs || []);
+    setDarkMode(Boolean(saved.darkMode));
   }, []);
 
-  function persist(nextSignals = signals, nextLogs = forwardLogs, nextAudit = auditLogs) {
-    saveState({ signals: nextSignals, forwardLogs: nextLogs, auditLogs: nextAudit, config, updatedAt: Date.now() });
+  function persist(
+    nextSignals = signals,
+    nextLogs = forwardLogs,
+    nextAudit = auditLogs,
+    nextDarkMode = darkMode
+  ) {
+    saveState({
+      signals: nextSignals,
+      forwardLogs: nextLogs,
+      auditLogs: nextAudit,
+      config,
+      darkMode: nextDarkMode,
+      updatedAt: Date.now(),
+    });
+  }
+
+  function toggleDarkMode() {
+    const next = !darkMode;
+    setDarkMode(next);
+    persist(signals, forwardLogs, auditLogs, next);
   }
 
   async function analyze() {
     try {
       setApiStatus("Đang lấy dữ liệu...");
+
       const btcCandles = await fetchCandles(config, "BTCUSDT", config.timeframe, 240);
       const btcBias = inferBtcBias(btcCandles);
-
       const out: Signal[] = [];
+
       for (const symbol of SYMBOLS) {
         const candles = symbol === "BTCUSDT" ? btcCandles : await fetchCandles(config, symbol, config.timeframe, 240);
         out.push(buildSignal(symbol, candles, btcBias, config));
       }
 
       const sorted = out.sort((a, b) => b.score - a.score);
-      const newAudit = [{ id: `${Date.now()}`, at: Date.now(), message: `Đã phân tích ${sorted.length} symbol qua ${config.dataSourceMode}` }, ...auditLogs].slice(0, 100);
+      const newAudit = [
+        {
+          id: `${Date.now()}`,
+          at: Date.now(),
+          message: `Đã phân tích ${sorted.length} symbol qua ${config.dataSourceMode}`,
+        },
+        ...auditLogs,
+      ].slice(0, 100);
+
       setSignals(sorted);
       setAuditLogs(newAudit);
       setApiStatus("API ổn");
@@ -587,38 +901,79 @@ export default function App() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Lỗi không xác định";
       setApiStatus(`Lỗi: ${msg}`);
+
       const newAudit = [{ id: `${Date.now()}`, at: Date.now(), message: msg }, ...auditLogs].slice(0, 100);
       setAuditLogs(newAudit);
       persist(signals, forwardLogs, newAudit);
     }
   }
 
-  function runForwardTest() {
-    const logs = signals.slice(0, 6).map(simulateForward);
-    const merged = new Map(forwardLogs.map((l) => [l.signalId, l]));
-    logs.forEach((l) => merged.set(l.signalId, l));
-    const nextLogs = Array.from(merged.values());
-    const newAudit = [{ id: `${Date.now()}`, at: Date.now(), message: "Đã chạy Forward Test 1m cho top 6 tín hiệu" }, ...auditLogs].slice(0, 100);
-    setForwardLogs(nextLogs);
-    setAuditLogs(newAudit);
-    persist(signals, nextLogs, newAudit);
+  async function runForwardTest() {
+    try {
+      setApiStatus("Đang chạy Forward Test 1m...");
+      const logs: ForwardLog[] = [];
+
+      for (const signal of signals.slice(0, 6)) {
+        const candles1m = await fetchCandles(config, signal.symbol, "1m", 1000);
+        logs.push(executeRealForwardTest1m(signal, candles1m));
+      }
+
+      const merged = new Map(forwardLogs.map((l) => [l.signalId, l]));
+      logs.forEach((l) => merged.set(l.signalId, l));
+
+      const nextLogs = Array.from(merged.values());
+      const newAudit = [
+        {
+          id: `${Date.now()}`,
+          at: Date.now(),
+          message: "Đã chạy Forward Test thật bằng nến 1m cho top 6 tín hiệu",
+        },
+        ...auditLogs,
+      ].slice(0, 100);
+
+      setForwardLogs(nextLogs);
+      setAuditLogs(newAudit);
+      setApiStatus("Forward Test 1m hoàn tất");
+      persist(signals, nextLogs, newAudit);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Lỗi Forward Test 1m";
+      const newAudit = [{ id: `${Date.now()}`, at: Date.now(), message: msg }, ...auditLogs].slice(0, 100);
+
+      setApiStatus(`Lỗi: ${msg}`);
+      setAuditLogs(newAudit);
+      persist(signals, forwardLogs, newAudit);
+    }
   }
 
   async function syncCloud() {
     try {
       setSyncStatus("Đang kéo dữ liệu cloud...");
+
       const remote = await pullSupabase(config);
       const byId = new Map<string, Signal>();
+
       [...(remote.signals || []), ...signals].forEach((s) => byId.set(s.id, s));
+
       const logById = new Map<string, ForwardLog>();
       [...(remote.forwardLogs || []), ...forwardLogs].forEach((l) => logById.set(l.signalId, l));
 
       const nextSignals = Array.from(byId.values()).sort((a, b) => b.score - a.score);
       const nextLogs = Array.from(logById.values());
-      const nextAudit = [{ id: `${Date.now()}`, at: Date.now(), message: "Đã kéo dữ liệu trước khi đẩy lên cloud" }, ...auditLogs].slice(0, 100);
+      const nextAudit = [
+        { id: `${Date.now()}`, at: Date.now(), message: "Đã kéo dữ liệu trước khi đẩy lên cloud" },
+        ...auditLogs,
+      ].slice(0, 100);
 
       setSyncStatus("Đang đẩy dữ liệu cloud...");
-      await pushSupabase(config, { signals: nextSignals, forwardLogs: nextLogs, auditLogs: nextAudit, config, updatedAt: Date.now() });
+
+      await pushSupabase(config, {
+        signals: nextSignals,
+        forwardLogs: nextLogs,
+        auditLogs: nextAudit,
+        config,
+        darkMode,
+        updatedAt: Date.now(),
+      });
 
       setSignals(nextSignals);
       setForwardLogs(nextLogs);
@@ -632,11 +987,41 @@ export default function App() {
 
   function addJournal() {
     if (!journalNote.trim()) return;
-    const note = { id: `${Date.now()}`, at: Date.now(), message: `Nhật ký: ${journalNote.trim()}` };
+
+    const note = {
+      id: `${Date.now()}`,
+      at: Date.now(),
+      message: `Nhật ký: ${journalNote.trim()}`,
+    };
+
     const nextAudit = [note, ...auditLogs].slice(0, 100);
+
     setAuditLogs(nextAudit);
     setJournalNote("");
     persist(signals, forwardLogs, nextAudit);
+  }
+
+  function clearLogs() {
+    const newAudit = [
+      {
+        id: `${Date.now()}`,
+        at: Date.now(),
+        message: "Đã xóa Forward Log và Nhật ký hệ thống để ghi dữ liệu mới.",
+      },
+    ];
+
+    setForwardLogs([]);
+    setAuditLogs(newAudit);
+    persist(signals, [], newAudit);
+  }
+
+  function clearAllLocalData() {
+    localStorage.removeItem(LOCAL_KEY);
+    setSignals([]);
+    setForwardLogs([]);
+    setAuditLogs([]);
+    setSyncStatus("Chỉ lưu máy này");
+    setApiStatus("Chưa phân tích");
   }
 
   const filtered = signals.filter((s) => {
@@ -651,39 +1036,107 @@ export default function App() {
   const risky = signals.filter((s) => ["HIGH_RISK", "BAD_RR", "AVOID"].includes(s.action)).length;
 
   return (
-    <div className="app">
+    <div className={darkMode ? "app dark" : "app"}>
       <header className="top">
         <div>
           <h1>Trợ lý Giao dịch Futures v4</h1>
           <p>Hỗ trợ quyết định trade futures thủ công · Không grid bot · Dữ liệu qua Worker Proxy · Đồng bộ Supabase</p>
         </div>
+
         <div className="topBadges">
+          <button className="secondary smallBtn" onClick={toggleDarkMode}>
+            {darkMode ? "Light Mode" : "Dark Mode"}
+          </button>
           <Badge tone="blue">{apiStatus}</Badge>
           <Badge tone="purple">{syncStatus}</Badge>
         </div>
       </header>
 
       <section className="metrics">
-        <Panel><div className="muted">Có thể vào lệnh</div><b>{tradeable}</b></Panel>
-        <Panel><div className="muted">Đang chờ</div><b>{waiting}</b></Panel>
-        <Panel><div className="muted">Rủi ro / bị chặn</div><b>{risky}</b></Panel>
-        <Panel><div className="muted">Tín hiệu đã lưu</div><b>{signals.length}</b></Panel>
-        <Panel><div className="muted">Forward log</div><b>{forwardLogs.length}</b></Panel>
+        <Panel>
+          <div className="muted">Có thể vào lệnh</div>
+          <b>{tradeable}</b>
+        </Panel>
+        <Panel>
+          <div className="muted">Đang chờ</div>
+          <b>{waiting}</b>
+        </Panel>
+        <Panel>
+          <div className="muted">Rủi ro / bị chặn</div>
+          <b>{risky}</b>
+        </Panel>
+        <Panel>
+          <div className="muted">Tín hiệu đã lưu</div>
+          <b>{signals.length}</b>
+        </Panel>
+        <Panel>
+          <div className="muted">Forward log</div>
+          <b>{forwardLogs.length}</b>
+        </Panel>
       </section>
 
       <Panel>
         <div className="configGrid">
-          <label>Vốn USDT<input type="number" value={config.capital} onChange={(e) => setConfig({ ...config, capital: Number(e.target.value) })} /></label>
-          <label>Chế độ rủi ro<select value={config.riskMode} onChange={(e) => setConfig({ ...config, riskMode: e.target.value as RiskMode })}><option value="SAFE">SAFE</option><option value="NORMAL">NORMAL</option><option value="AGGRESSIVE">AGGRESSIVE</option></select></label>
-          <label>Số lệnh tối đa<input type="number" value={config.maxActiveTrades} onChange={(e) => setConfig({ ...config, maxActiveTrades: Number(e.target.value) })} /></label>
-          <label>Khung tín hiệu<select value={config.timeframe} onChange={(e) => setConfig({ ...config, timeframe: e.target.value as AppConfig["timeframe"] })}><option value="5m">5m</option><option value="15m">15m</option><option value="1h">1h</option></select></label>
-          <label>Nguồn dữ liệu<select value={config.dataSourceMode} onChange={(e) => setConfig({ ...config, dataSourceMode: e.target.value as DataSourceMode })}><option value="WORKER_PROXY">WORKER_PROXY</option><option value="BINANCE_DIRECT">BINANCE_DIRECT</option><option value="MOCK">MOCK</option></select></label>
+          <label>
+            Vốn USDT
+            <input type="number" value={config.capital} onChange={(e) => setConfig({ ...config, capital: Number(e.target.value) })} />
+          </label>
+          <label>
+            Chế độ rủi ro
+            <select value={config.riskMode} onChange={(e) => setConfig({ ...config, riskMode: e.target.value as RiskMode })}>
+              <option value="SAFE">SAFE</option>
+              <option value="NORMAL">NORMAL</option>
+              <option value="AGGRESSIVE">AGGRESSIVE</option>
+            </select>
+          </label>
+          <label>
+            Số lệnh tối đa
+            <input
+              type="number"
+              value={config.maxActiveTrades}
+              onChange={(e) => setConfig({ ...config, maxActiveTrades: Number(e.target.value) })}
+            />
+          </label>
+          <label>
+            Khung tín hiệu
+            <select value={config.timeframe} onChange={(e) => setConfig({ ...config, timeframe: e.target.value as AppConfig["timeframe"] })}>
+              <option value="5m">5m</option>
+              <option value="15m">15m</option>
+              <option value="1h">1h</option>
+            </select>
+          </label>
+          <label>
+            Nguồn dữ liệu
+            <select
+              value={config.dataSourceMode}
+              onChange={(e) => setConfig({ ...config, dataSourceMode: e.target.value as DataSourceMode })}
+            >
+              <option value="WORKER_PROXY">WORKER_PROXY</option>
+              <option value="BINANCE_DIRECT">BINANCE_DIRECT</option>
+              <option value="MOCK">MOCK</option>
+            </select>
+          </label>
         </div>
-        <label className="fullLabel">URL Proxy Cloudflare Worker<input value={config.workerProxyUrl} onChange={(e) => setConfig({ ...config, workerProxyUrl: e.target.value })} /></label>
+
+        <label className="fullLabel">
+          URL Proxy Cloudflare Worker
+          <input value={config.workerProxyUrl} onChange={(e) => setConfig({ ...config, workerProxyUrl: e.target.value })} />
+        </label>
+
         <div className="actions">
           <button onClick={analyze}>Phân tích</button>
-          <button className="secondary" onClick={runForwardTest}>Chạy Forward Test 1m</button>
-          <button className="secondary" onClick={syncCloud}>Đồng bộ Supabase</button>
+          <button className="secondary" onClick={runForwardTest}>
+            Chạy Forward Test 1m
+          </button>
+          <button className="secondary" onClick={syncCloud}>
+            Đồng bộ Supabase
+          </button>
+          <button className="dangerBtn" onClick={clearLogs}>
+            Xóa log
+          </button>
+          <button className="dangerBtn soft" onClick={clearAllLocalData}>
+            Xóa toàn bộ local
+          </button>
         </div>
       </Panel>
 
@@ -698,44 +1151,96 @@ export default function App() {
       <section className="signals">
         {filtered.map((s) => {
           const log = forwardLogs.find((l) => l.signalId === s.id);
+
           return (
             <Panel key={s.id} className="signal">
               <div className="signalHead">
                 <div>
-                  <h2>{s.symbol}</h2>
-                  <div className="muted">{s.setup} · {viRegime(s.regime)} · Điểm {s.score}/100</div>
+                  <h2 className="symbolLink" onClick={() => openBinanceFutures(s.symbol)} title="Mở trên Binance Futures">
+                    {s.symbol}
+                  </h2>
+                  <div className="muted">
+                    {s.setup} · {viRegime(s.regime)} · Điểm {s.score}/100
+                  </div>
                 </div>
+
                 <div className="badges">
-                  <Badge tone={s.side === "LONG" ? "green" : s.side === "SHORT" ? "red" : "neutral"}>{s.side === "LONG" ? "LONG / MUA" : s.side === "SHORT" ? "SHORT / BÁN" : "TRUNG LẬP"}</Badge>
-                  <Badge tone={s.grade === "A+" ? "purple" : s.grade === "A" ? "green" : s.grade === "B" ? "blue" : "yellow"}>{s.grade}</Badge>
-                  <Badge tone={s.action === "ENTRY_OK" ? "green" : s.action === "HIGH_RISK" || s.action === "BAD_RR" || s.action === "AVOID" ? "red" : "yellow"}>{viAction(s.action)}</Badge>
+                  <Badge tone={s.side === "LONG" ? "green" : s.side === "SHORT" ? "red" : "neutral"}>
+                    {s.side === "LONG" ? "LONG / MUA" : s.side === "SHORT" ? "SHORT / BÁN" : "TRUNG LẬP"}
+                  </Badge>
+                  <Badge tone={s.grade === "A+" ? "purple" : s.grade === "A" ? "green" : s.grade === "B" ? "blue" : "yellow"}>
+                    {s.grade}
+                  </Badge>
+                  <Badge tone={s.action === "ENTRY_OK" ? "green" : s.action === "HIGH_RISK" || s.action === "BAD_RR" || s.action === "AVOID" ? "red" : "yellow"}>
+                    {viAction(s.action)}
+                  </Badge>
                 </div>
               </div>
 
               <div className="priceGrid">
-                <div><span>Vùng Entry</span><b>{fmt(s.entryLow)} - {fmt(s.entryHigh)}</b></div>
-                <div><span>Entry tốt nhất</span><b>{fmt(s.bestEntry)}</b></div>
-                <div><span>SL</span><b className="redText">{fmt(s.sl)}</b></div>
-                <div><span>TP1 / TP2</span><b className="greenText">{fmt(s.tp1)} / {fmt(s.tp2)}</b></div>
+                <div>
+                  <span>Vùng Entry</span>
+                  <b>
+                    {fmt(s.entryLow)} - {fmt(s.entryHigh)}
+                  </b>
+                </div>
+                <div>
+                  <span>Entry tốt nhất</span>
+                  <b>{fmt(s.bestEntry)}</b>
+                </div>
+                <div>
+                  <span>SL</span>
+                  <b className="redText">{fmt(s.sl)}</b>
+                </div>
+                <div>
+                  <span>TP1 / TP2</span>
+                  <b className="greenText">
+                    {fmt(s.tp1)} / {fmt(s.tp2)}
+                  </b>
+                </div>
               </div>
 
               <div className="miniGrid">
-                <div>Đòn bẩy <b>x{s.leverage}</b></div>
-                <div>Ký quỹ <b>{s.margin}</b></div>
-                <div>Rủi ro <b>{s.riskUsdt}</b></div>
-                <div>RR <b>{s.rr}</b></div>
+                <div>
+                  Đòn bẩy <b>x{s.leverage}</b>
+                </div>
+                <div>
+                  Ký quỹ <b>{s.margin}</b>
+                </div>
+                <div>
+                  Rủi ro <b>{s.riskUsdt}</b>
+                </div>
+                <div>
+                  RR <b>{s.rr}</b>
+                </div>
               </div>
 
               <div className="notes">
-                {s.reasons.map((r, i) => <p key={i}>• {r}</p>)}
-                {s.warnings.map((w, i) => <p key={i} className="warn">⚠ {w}</p>)}
-                {s.blocks.map((b, i) => <p key={i} className="danger">⛔ Bị chặn: {b}</p>)}
+                {s.reasons.map((r, i) => (
+                  <p key={i}>• {r}</p>
+                ))}
+                {s.warnings.map((w, i) => (
+                  <p key={i} className="warn">
+                    ⚠ {w}
+                  </p>
+                ))}
+                {s.blocks.map((b, i) => (
+                  <p key={i} className="danger">
+                    ⛔ Bị chặn: {b}
+                  </p>
+                ))}
               </div>
 
               {log && (
                 <div className="log">
-                  <b>Forward Test: {viStatus(log.status)} · {log.resultR}R</b>
-                  {log.replay.map((line, i) => <div key={i}>{i + 1}. {line}</div>)}
+                  <b>
+                    Forward Test: {viStatus(log.status)} · {log.resultR}R
+                  </b>
+                  {log.replay.map((line, i) => (
+                    <div key={i}>
+                      {i + 1}. {line}
+                    </div>
+                  ))}
                 </div>
               )}
             </Panel>
@@ -746,25 +1251,43 @@ export default function App() {
       <Panel>
         <h2>Nhật ký lệnh thật</h2>
         <div className="journal">
-          <input placeholder="Ghi chú lệnh thật / tâm lý / lý do vào lệnh..." value={journalNote} onChange={(e) => setJournalNote(e.target.value)} />
+          <input
+            placeholder="Ghi chú lệnh thật / tâm lý / lý do vào lệnh..."
+            value={journalNote}
+            onChange={(e) => setJournalNote(e.target.value)}
+          />
           <button onClick={addJournal}>Thêm ghi chú</button>
         </div>
       </Panel>
 
       <Panel>
         <h2>Nhật ký hệ thống</h2>
-        {auditLogs.slice(0, 8).map((l) => <div key={l.id} className="audit"><span>{l.message}</span><span>{time(l.at)}</span></div>)}
+        {auditLogs.slice(0, 8).map((l) => (
+          <div key={l.id} className="audit">
+            <span>{l.message}</span>
+            <span>{time(l.at)}</span>
+          </div>
+        ))}
         {!auditLogs.length && <div className="muted">Chưa có sự kiện hệ thống.</div>}
       </Panel>
 
       <Panel>
         <h2>SQL và Worker triển khai</h2>
         <div className="actions">
-          <button className="secondary" onClick={() => setShowSql(!showSql)}>{showSql ? "Ẩn SQL" : "Hiện SQL Supabase"}</button>
-          <button className="secondary" onClick={() => navigator.clipboard.writeText(SCHEMA_SQL + "\n\n" + RLS_SQL)}>Copy SQL</button>
-          <button className="secondary" onClick={() => setShowWorker(!showWorker)}>{showWorker ? "Ẩn Worker" : "Hiện Worker Proxy"}</button>
-          <button className="secondary" onClick={() => navigator.clipboard.writeText(WORKER_CODE)}>Copy Worker</button>
+          <button className="secondary" onClick={() => setShowSql(!showSql)}>
+            {showSql ? "Ẩn SQL" : "Hiện SQL Supabase"}
+          </button>
+          <button className="secondary" onClick={() => navigator.clipboard.writeText(SCHEMA_SQL + "\n\n" + RLS_SQL)}>
+            Copy SQL
+          </button>
+          <button className="secondary" onClick={() => setShowWorker(!showWorker)}>
+            {showWorker ? "Ẩn Worker" : "Hiện Worker Proxy"}
+          </button>
+          <button className="secondary" onClick={() => navigator.clipboard.writeText(WORKER_CODE)}>
+            Copy Worker
+          </button>
         </div>
+
         {showSql && <pre>{SCHEMA_SQL + "\n\n" + RLS_SQL}</pre>}
         {showWorker && <pre>{WORKER_CODE}</pre>}
       </Panel>
