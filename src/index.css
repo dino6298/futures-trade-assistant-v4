@@ -744,9 +744,3 @@ body:has(.app.dark) {
     grid-template-columns: 1fr 1fr;
   }
 }
-
-
-.hiddenFileInput {
-  display: none;
-}
-

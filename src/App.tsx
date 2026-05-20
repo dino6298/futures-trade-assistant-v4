@@ -102,14 +102,6 @@ type AuditLog = {
   message: string;
 };
 
-
-type BackupFile = {
-  app: "Futures Trade Assistant v4";
-  backupVersion: 1;
-  exportedAt: number;
-  data: PersistentState;
-};
-
 type PersistentState = {
   signals: Signal[];
   forwardLogs: ForwardLog[];
@@ -1064,121 +1056,6 @@ export default function App() {
     }
   }
 
-
-  function exportBackupJson() {
-    const backup: BackupFile = {
-      app: "Futures Trade Assistant v4",
-      backupVersion: 1,
-      exportedAt: Date.now(),
-      data: {
-        signals: keepLatestSignalPerSymbol(signals),
-        forwardLogs,
-        auditLogs,
-        config,
-        darkMode,
-        learningStats,
-        updatedAt: Date.now(),
-      },
-    };
-
-    const blob = new Blob([JSON.stringify(backup, null, 2)], {
-      type: "application/json;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const exportedAtText = new Date(backup.exportedAt)
-      .toISOString()
-      .slice(0, 16)
-      .replace(/[-:T]/g, "");
-    const fileName = `fta-v4-backup-${exportedAtText}.json`;
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-
-    const newAudit = [
-      {
-        id: `${Date.now()}`,
-        at: Date.now(),
-        message: `Đã xuất backup JSON: ${fileName}`,
-      },
-      ...auditLogs,
-    ].slice(0, 100);
-
-    setAuditLogs(newAudit);
-    persist(signals, forwardLogs, newAudit);
-  }
-
-  function triggerImportBackup() {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "application/json";
-    input.onchange = () => {
-      importBackupJson(input.files?.[0] || null);
-      input.remove();
-    };
-    input.click();
-  }
-
-  async function importBackupJson(file: File | null) {
-    if (!file) return;
-
-    try {
-      const raw = await file.text();
-      const parsed = JSON.parse(raw) as BackupFile | PersistentState;
-      const imported = "data" in parsed ? parsed.data : parsed;
-
-      if (!imported || !Array.isArray(imported.signals) || !Array.isArray(imported.forwardLogs)) {
-        throw new Error("File backup không đúng định dạng.");
-      }
-
-      const confirmed = window.confirm(
-        "Import backup sẽ gộp dữ liệu trong file vào local hiện tại. Signal trùng sẽ giữ tín hiệu mới nhất theo symbol, Forward Log trùng signalId sẽ giữ log có testedAt mới nhất. Tiếp tục?"
-      );
-
-      if (!confirmed) return;
-
-      const nextSignals = mergeSignalsLocalWins(signals, imported.signals || []);
-      const nextLogs = mergeForwardLogsKeepLatest(forwardLogs, imported.forwardLogs || []);
-      const importedLearningStats = imported.learningStats || buildLearningStats(nextSignals, nextLogs);
-      const nextLearningStats = importedLearningStats.length ? importedLearningStats : buildLearningStats(nextSignals, nextLogs);
-      const newAudit = [
-        {
-          id: `${Date.now()}`,
-          at: Date.now(),
-          message: `Đã import backup JSON: ${file.name}. Gộp ${imported.signals?.length || 0} signal và ${imported.forwardLogs?.length || 0} forward log.`,
-        },
-        ...(imported.auditLogs || []),
-        ...auditLogs,
-      ].slice(0, 100);
-
-      setSignals(nextSignals);
-      setForwardLogs(nextLogs);
-      setLearningStats(nextLearningStats);
-      setAuditLogs(newAudit);
-
-      saveState({
-        signals: nextSignals,
-        forwardLogs: nextLogs,
-        auditLogs: newAudit,
-        config,
-        darkMode,
-        learningStats: nextLearningStats,
-        updatedAt: Date.now(),
-      });
-
-      setSyncStatus("Đã import backup vào local");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Lỗi import backup";
-      setSyncStatus(`Lỗi import backup: ${msg}`);
-    } finally {
-      // Không cần reset input vì input import được tạo động mỗi lần bấm.
-    }
-  }
-
   function addJournal() {
     if (!journalNote.trim()) return;
 
@@ -1324,12 +1201,6 @@ export default function App() {
           </button>
           <button className="secondary" onClick={syncCloud}>
             Đồng bộ Supabase
-          </button>
-          <button className="secondary" onClick={exportBackupJson}>
-            Export Backup
-          </button>
-          <button className="secondary" onClick={triggerImportBackup}>
-            Import Backup
           </button>
           <button className="dangerBtn" onClick={clearLogs}>
             Xóa log
