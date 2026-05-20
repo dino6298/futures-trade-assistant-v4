@@ -744,3 +744,12 @@ body:has(.app.dark) {
     grid-template-columns: 1fr 1fr;
   }
 }
+.dangerBtn.cloud {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.app.dark .dangerBtn.cloud {
+  background: #ef4444;
+  color: #08111f;
+}
