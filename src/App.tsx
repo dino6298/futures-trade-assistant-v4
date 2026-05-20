@@ -55,6 +55,13 @@ type AppConfig = {
   supabaseAnonKey: string;
 };
 
+type SymbolRule = {
+  symbol: string;
+  minNotional: number;
+  minQty: number;
+  stepSize: number;
+};
+
 type Signal = {
   id: string;
   symbol: string;
@@ -117,8 +124,24 @@ const SYMBOLS = [
 ];
 
 const LOCAL_KEY = "fta_v4_standalone_state";
-const MIN_MARGIN_USDT = 5.5;
-const MIN_NOTIONAL_USDT = 5;
+
+const FALLBACK_SYMBOL_RULES: Record<string, SymbolRule> = {
+  BTCUSDT: { symbol: "BTCUSDT", minNotional: 100, minQty: 0.001, stepSize: 0.001 },
+  ETHUSDT: { symbol: "ETHUSDT", minNotional: 20, minQty: 0.001, stepSize: 0.001 },
+  BNBUSDT: { symbol: "BNBUSDT", minNotional: 20, minQty: 0.01, stepSize: 0.01 },
+  SOLUSDT: { symbol: "SOLUSDT", minNotional: 10, minQty: 0.1, stepSize: 0.1 },
+  LINKUSDT: { symbol: "LINKUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  OPUSDT: { symbol: "OPUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  ARBUSDT: { symbol: "ARBUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  DOGEUSDT: { symbol: "DOGEUSDT", minNotional: 5, minQty: 1, stepSize: 1 },
+};
+
+const DEFAULT_SYMBOL_RULE: SymbolRule = {
+  symbol: "DEFAULT",
+  minNotional: 5,
+  minQty: 0,
+  stepSize: 0,
+};
 
 const DEFAULT_CONFIG: AppConfig = {
   capital: 15,
@@ -356,13 +379,11 @@ function displayActionTone(
 function orderCompatibilityWarnings(signal: Signal) {
   const warnings: string[] = [];
   const notional = signal.margin * signal.leverage;
+  const fallbackRule = getFallbackRule(signal.symbol);
+  const fallbackMinNotional = fallbackRule.minNotional;
 
-  if (signal.margin < MIN_MARGIN_USDT) {
-    warnings.push(`Ký quỹ thấp hơn ${MIN_MARGIN_USDT} USDT/lệnh.`);
-  }
-
-  if (notional < MIN_NOTIONAL_USDT) {
-    warnings.push(`Notional thấp hơn ${MIN_NOTIONAL_USDT} USDT.`);
+  if (notional < fallbackMinNotional) {
+    warnings.push(`Notional ước tính ${roundUp(notional, 2)} USDT thấp hơn rule dự phòng của ${signal.symbol}: ${fallbackMinNotional} USDT.`);
   }
 
   return warnings;
@@ -370,6 +391,74 @@ function orderCompatibilityWarnings(signal: Signal) {
 
 function openBinanceFutures(symbol: string) {
   window.open(`https://www.binance.com/vi/futures/${symbol}`, "_blank", "noopener,noreferrer");
+}
+
+function roundUp(value: number, decimals = 2) {
+  const factor = Math.pow(10, decimals);
+  return Math.ceil(value * factor) / factor;
+}
+
+function getFallbackRule(symbol: string): SymbolRule {
+  return FALLBACK_SYMBOL_RULES[symbol] || { ...DEFAULT_SYMBOL_RULE, symbol };
+}
+
+function getRequiredMarginBySymbol(symbol: string, price: number, leverage: number, rules: Record<string, SymbolRule>) {
+  const rule = rules[symbol] || getFallbackRule(symbol);
+  const minQtyNotional = rule.minQty > 0 ? rule.minQty * price : 0;
+  const requiredNotional = Math.max(rule.minNotional || 0, minQtyNotional || 0, DEFAULT_SYMBOL_RULE.minNotional);
+  const requiredMargin = roundUp(requiredNotional / Math.max(leverage, 1) + 0.02, 2);
+
+  return {
+    rule,
+    minQtyNotional,
+    requiredNotional,
+    requiredMargin,
+  };
+}
+
+function parseSymbolRules(raw: any): Record<string, SymbolRule> {
+  const out: Record<string, SymbolRule> = {};
+
+  if (!raw || !Array.isArray(raw.symbols)) return out;
+
+  for (const symbolInfo of raw.symbols) {
+    if (!symbolInfo || typeof symbolInfo.symbol !== "string") continue;
+    if (!SYMBOLS.includes(symbolInfo.symbol)) continue;
+
+    const filters = Array.isArray(symbolInfo.filters) ? symbolInfo.filters : [];
+    const minNotionalFilter = filters.find((f: any) => f.filterType === "MIN_NOTIONAL" || f.filterType === "NOTIONAL");
+    const lotFilter =
+      filters.find((f: any) => f.filterType === "MARKET_LOT_SIZE") ||
+      filters.find((f: any) => f.filterType === "LOT_SIZE");
+
+    out[symbolInfo.symbol] = {
+      symbol: symbolInfo.symbol,
+      minNotional: Number(minNotionalFilter?.notional ?? minNotionalFilter?.minNotional ?? DEFAULT_SYMBOL_RULE.minNotional),
+      minQty: Number(lotFilter?.minQty ?? 0),
+      stepSize: Number(lotFilter?.stepSize ?? 0),
+    };
+  }
+
+  return out;
+}
+
+async function fetchSymbolRules(config: AppConfig): Promise<Record<string, SymbolRule>> {
+  try {
+    const url =
+      config.dataSourceMode === "WORKER_PROXY"
+        ? `${config.workerProxyUrl.replace(/\/$/, "")}/exchangeInfo`
+        : "https://fapi.binance.com/fapi/v1/exchangeInfo";
+
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`exchangeInfo lỗi ${res.status}`);
+
+    const raw = await res.json();
+    const parsed = parseSymbolRules(raw);
+
+    return { ...FALLBACK_SYMBOL_RULES, ...parsed };
+  } catch {
+    return { ...FALLBACK_SYMBOL_RULES };
+  }
 }
 
 function generateMockCandles(symbol: string, interval: string, limit = 240): Candle[] {
@@ -503,7 +592,7 @@ function inferBtcBias(candles: Candle[]): BtcBias {
   return "BTC_NEUTRAL";
 }
 
-function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config: AppConfig): Signal {
+function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config: AppConfig, symbolRules: Record<string, SymbolRule>): Signal {
   const closes = candles.map((c) => c.close);
   const last = candles[candles.length - 1];
   const price = last?.close || basePrice(symbol);
@@ -550,9 +639,7 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
 
   if (regime === "HIGH_VOLATILITY") warnings.push("Thị trường biến động mạnh, nên giảm đòn bẩy.");
   if (regime === "CHOPPY") warnings.push("Thị trường nhiễu, ưu tiên chờ entry đẹp.");
-  if (config.capital / Math.max(config.maxActiveTrades, 1) < MIN_MARGIN_USDT) {
-    warnings.push(`Vốn chia theo số lệnh hiện tại thấp hơn ${MIN_MARGIN_USDT} USDT/lệnh. Tool đã nâng ký quỹ tối thiểu lên ${MIN_MARGIN_USDT} USDT để tránh lỗi nhập lệnh.`);
-  }
+  const budgetPerTrade = config.capital / Math.max(config.maxActiveTrades, 1);
   if (rr < 1.2) blocks.push("RR_XAU");
   if (side === "LONG" && btcBias === "BTC_DUMP_RISK") blocks.push("BTC_DUMP_CHAN_LONG");
   if (side === "SHORT" && btcBias === "BTC_PUMP_RISK") blocks.push("BTC_PUMP_CHAN_SHORT");
@@ -578,7 +665,21 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
   const maxLev = config.riskMode === "AGGRESSIVE" ? 40 : config.riskMode === "NORMAL" ? 30 : 20;
   const leverage = grade === "A+" ? maxLev : grade === "A" ? Math.min(maxLev, 25) : Math.min(maxLev, 15);
   const suggestedBudgetPerTrade = config.capital / Math.max(config.maxActiveTrades, 1);
-  const margin = Math.max(MIN_MARGIN_USDT, suggestedBudgetPerTrade);
+  const marginRule = getRequiredMarginBySymbol(symbol, price, leverage, symbolRules);
+  const margin = Math.max(marginRule.requiredMargin, suggestedBudgetPerTrade);
+
+  if (marginRule.requiredMargin > suggestedBudgetPerTrade) {
+    warnings.push(
+      `${symbol} cần ký quỹ tối thiểu khoảng ${marginRule.requiredMargin} USDT/lệnh theo rule symbol hiện tại. Tool đã điều chỉnh ký quỹ theo symbol, không dùng mức cố định.`
+    );
+  }
+
+  if (margin * config.maxActiveTrades > config.capital) {
+    warnings.push(
+      `Vốn ${config.capital} USDT không đủ để mở đồng thời ${config.maxActiveTrades} lệnh nếu mỗi lệnh cần khoảng ${roundUp(margin, 2)} USDT. Nên giảm Số lệnh tối đa.`
+    );
+  }
+
   const riskUsdt =
     grade === "NO_TRADE"
       ? 0
@@ -607,7 +708,7 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
     tp1,
     tp2,
     leverage,
-    margin: Number(margin.toFixed(2)),
+    margin: roundUp(margin, 2),
     riskUsdt: Number(riskUsdt.toFixed(2)),
     rr: Number(rr.toFixed(2)),
     regime,
@@ -862,6 +963,30 @@ async function pullSupabase(config: AppConfig): Promise<Partial<PersistentState>
   };
 }
 
+function keepLatestSignalPerSymbol(inputSignals: Signal[]) {
+  const map = new Map<string, Signal>();
+
+  for (const signal of inputSignals) {
+    const existing = map.get(signal.symbol);
+
+    if (!existing) {
+      map.set(signal.symbol, signal);
+      continue;
+    }
+
+    if (signal.signalTime > existing.signalTime) {
+      map.set(signal.symbol, signal);
+      continue;
+    }
+
+    if (signal.signalTime === existing.signalTime && signal.score > existing.score) {
+      map.set(signal.symbol, signal);
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => b.score - a.score);
+}
+
 function Badge({
   children,
   tone = "neutral",
@@ -902,7 +1027,7 @@ export default function App() {
       });
     }
 
-    setSignals(saved.signals || []);
+    setSignals(keepLatestSignalPerSymbol(saved.signals || []));
     setForwardLogs(saved.forwardLogs || []);
     setAuditLogs(saved.auditLogs || []);
     setDarkMode(Boolean(saved.darkMode));
@@ -915,7 +1040,7 @@ export default function App() {
     nextDarkMode = darkMode
   ) {
     saveState({
-      signals: nextSignals,
+      signals: keepLatestSignalPerSymbol(nextSignals),
       forwardLogs: nextLogs,
       auditLogs: nextAudit,
       config,
@@ -934,21 +1059,24 @@ export default function App() {
     try {
       setApiStatus("Đang lấy dữ liệu...");
 
-      const btcCandles = await fetchCandles(config, "BTCUSDT", config.timeframe, 240);
+      const [btcCandles, symbolRules] = await Promise.all([
+        fetchCandles(config, "BTCUSDT", config.timeframe, 240),
+        fetchSymbolRules(config),
+      ]);
       const btcBias = inferBtcBias(btcCandles);
       const out: Signal[] = [];
 
       for (const symbol of SYMBOLS) {
         const candles = symbol === "BTCUSDT" ? btcCandles : await fetchCandles(config, symbol, config.timeframe, 240);
-        out.push(buildSignal(symbol, candles, btcBias, config));
+        out.push(buildSignal(symbol, candles, btcBias, config, symbolRules));
       }
 
-      const sorted = out.sort((a, b) => b.score - a.score);
+      const sorted = keepLatestSignalPerSymbol(out);
       const newAudit = [
         {
           id: `${Date.now()}`,
           at: Date.now(),
-          message: `Đã phân tích ${sorted.length} symbol qua ${config.dataSourceMode}`,
+          message: `Đã phân tích ${sorted.length} symbol qua ${config.dataSourceMode}. Ký quỹ được tính theo rule riêng từng symbol. Màn hình chính chỉ giữ 1 tín hiệu mới nhất cho mỗi symbol.`,
         },
         ...auditLogs,
       ].slice(0, 100);
@@ -1016,7 +1144,7 @@ export default function App() {
       const logById = new Map<string, ForwardLog>();
       [...(remote.forwardLogs || []), ...forwardLogs].forEach((l) => logById.set(l.signalId, l));
 
-      const nextSignals = Array.from(byId.values()).sort((a, b) => b.score - a.score);
+      const nextSignals = keepLatestSignalPerSymbol(Array.from(byId.values()));
       const nextLogs = Array.from(logById.values());
       const nextAudit = [
         { id: `${Date.now()}`, at: Date.now(), message: "Đã kéo dữ liệu trước khi đẩy lên cloud" },
