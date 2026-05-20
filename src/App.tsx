@@ -95,6 +95,8 @@ type ForwardLog = {
   resultR: number;
   replay: string[];
   failureReason?: string;
+  testedAt?: number;
+  forwardRunId?: string;
   entryHit?: boolean;
   entryHitMinutes?: number;
   maxFavorableR?: number;
@@ -1058,6 +1060,87 @@ function keepLatestSignalPerSymbol(inputSignals: Signal[]) {
 }
 
 
+
+function getForwardLogTime(log: ForwardLog) {
+  return log.testedAt || 0;
+}
+
+function forwardStatusRank(status: ForwardStatus) {
+  const rank: Record<ForwardStatus, number> = {
+    WAITING_ENTRY: 0,
+    NO_ENTRY: 1,
+    EXPIRED: 2,
+    ENTRY_HIT: 3,
+    BE_HIT: 4,
+    SL_HIT: 5,
+    TP1_HIT: 6,
+    TP2_HIT: 7,
+  };
+
+  return rank[status] ?? 0;
+}
+
+function pickLatestForwardLog(a: ForwardLog, b: ForwardLog) {
+  const aTime = getForwardLogTime(a);
+  const bTime = getForwardLogTime(b);
+
+  if (bTime > aTime) return b;
+  if (aTime > bTime) return a;
+
+  const aRank = forwardStatusRank(a.status);
+  const bRank = forwardStatusRank(b.status);
+
+  return bRank >= aRank ? b : a;
+}
+
+function mergeForwardLogsKeepLatest(localLogs: ForwardLog[], remoteLogs: ForwardLog[]) {
+  const merged = new Map<string, ForwardLog>();
+
+  for (const remote of remoteLogs) {
+    if (!remote?.signalId) continue;
+    merged.set(remote.signalId, remote);
+  }
+
+  for (const local of localLogs) {
+    if (!local?.signalId) continue;
+
+    const existing = merged.get(local.signalId);
+
+    if (!existing) {
+      merged.set(local.signalId, local);
+      continue;
+    }
+
+    merged.set(local.signalId, pickLatestForwardLog(existing, local));
+  }
+
+  return Array.from(merged.values());
+}
+
+function ensureForwardLogMeta(log: ForwardLog, forwardRunId: string, testedAt: number) {
+  return {
+    ...log,
+    forwardRunId: log.forwardRunId || forwardRunId,
+    testedAt: log.testedAt || testedAt,
+  };
+}
+
+function mergeSignalsLocalWins(localSignals: Signal[], remoteSignals: Signal[]) {
+  const merged = new Map<string, Signal>();
+
+  for (const remote of remoteSignals) {
+    if (!remote?.id) continue;
+    merged.set(remote.id, remote);
+  }
+
+  for (const local of localSignals) {
+    if (!local?.id) continue;
+    merged.set(local.id, local);
+  }
+
+  return keepLatestSignalPerSymbol(Array.from(merged.values()));
+}
+
 function isWinningLog(log: ForwardLog) {
   return log.status === "TP1_HIT" || log.status === "TP2_HIT" || log.status === "BE_HIT" || log.resultR > 0;
 }
@@ -1374,16 +1457,16 @@ export default function App() {
     try {
       setApiStatus("Đang chạy Forward Test 1m...");
       const logs: ForwardLog[] = [];
+      const testedAt = Date.now();
+      const forwardRunId = `FT_${testedAt}`;
 
       for (const signal of signals.slice(0, 6)) {
         const candles1m = await fetchCandles(config, signal.symbol, "1m", 1000);
-        logs.push(executeRealForwardTest1m(signal, candles1m));
+        const log = executeRealForwardTest1m(signal, candles1m);
+        logs.push(ensureForwardLogMeta(log, forwardRunId, testedAt));
       }
 
-      const merged = new Map(forwardLogs.map((l) => [l.signalId, l]));
-      logs.forEach((l) => merged.set(l.signalId, l));
-
-      const nextLogs = Array.from(merged.values());
+      const nextLogs = mergeForwardLogsKeepLatest(forwardLogs, logs);
       const newAudit = [
         {
           id: `${Date.now()}`,
@@ -1411,27 +1494,24 @@ export default function App() {
 
   async function syncCloud() {
     try {
-      setSyncStatus("Đang kéo dữ liệu cloud...");
+      setSyncStatus("Đang kéo cloud và giữ local ưu tiên...");
+
+      const localSignalsSnapshot = [...signals];
+      const localForwardLogsSnapshot = [...forwardLogs];
 
       const remote = await pullSupabase(config);
-      const byId = new Map<string, Signal>();
 
-      [...(remote.signals || []), ...signals].forEach((s) => byId.set(s.id, s));
-
-      const logById = new Map<string, ForwardLog>();
-      [...(remote.forwardLogs || []), ...forwardLogs].forEach((l) => logById.set(l.signalId, l));
-
-      const nextSignals = keepLatestSignalPerSymbol(Array.from(byId.values()));
-      const nextLogs = Array.from(logById.values());
+      const nextSignals = mergeSignalsLocalWins(localSignalsSnapshot, remote.signals || []);
+      const nextLogs = mergeForwardLogsKeepLatest(localForwardLogsSnapshot, remote.forwardLogs || []);
       const nextAudit = [
-        { id: `${Date.now()}`, at: Date.now(), message: "Đã kéo dữ liệu trước khi đẩy lên cloud" },
+        { id: `${Date.now()}`, at: Date.now(), message: "Đồng bộ an toàn: signal trùng giữ bản local/mới nhất, Forward Log trùng signalId giữ bản testedAt mới nhất." },
         ...auditLogs,
       ].slice(0, 100);
 
-      setSyncStatus("Đang đẩy dữ liệu cloud...");
+      setSyncStatus("Đang ghi dữ liệu đã gộp lên cloud...");
 
       await pushSupabase(config, {
-        signals: nextSignals,
+        signals: keepLatestSignalPerSymbol(nextSignals),
         forwardLogs: nextLogs,
         auditLogs: nextAudit,
         config,
@@ -1445,7 +1525,7 @@ export default function App() {
       setLearningStats(nextLearningStats);
       setAuditLogs(nextAudit);
       persist(nextSignals, nextLogs, nextAudit);
-      setSyncStatus("Đã đồng bộ");
+      setSyncStatus("Đã đồng bộ an toàn");
     } catch (err) {
       setSyncStatus(err instanceof Error ? `Lỗi đồng bộ: ${err.message}` : "Lỗi đồng bộ");
     }
@@ -1535,6 +1615,24 @@ export default function App() {
     });
   }
 
+
+  function cleanupDuplicateSymbols() {
+    const nextSignals = keepLatestSignalPerSymbol(signals);
+    const newAudit = [
+      {
+        id: `${Date.now()}`,
+        at: Date.now(),
+        message: `Đã dọn trùng symbol trên local: ${signals.length} → ${nextSignals.length} tín hiệu.`,
+      },
+      ...auditLogs,
+    ].slice(0, 100);
+
+    setSignals(nextSignals);
+    setAuditLogs(newAudit);
+    persist(nextSignals, forwardLogs, newAudit);
+    setSyncStatus("Đã dọn trùng symbol local");
+  }
+
   function addJournal() {
     if (!journalNote.trim()) return;
 
@@ -1576,7 +1674,9 @@ export default function App() {
     setApiStatus("Chưa phân tích");
   }
 
-  const filtered = signals.filter((s) => {
+  const uniqueSignals = keepLatestSignalPerSymbol(signals);
+
+  const filtered = uniqueSignals.filter((s) => {
     const log = forwardLogs.find((l) => l.signalId === s.id);
 
     if (filter === "ENTRY") {
@@ -1594,19 +1694,19 @@ export default function App() {
     return true;
   });
 
-  const tradeable = signals.filter((s) => {
+  const tradeable = uniqueSignals.filter((s) => {
     const log = forwardLogs.find((l) => l.signalId === s.id);
     return s.action === "ENTRY_OK" && (!log || !isTerminalForwardStatus(log.status));
   }).length;
 
-  const waiting = signals.filter((s) => {
+  const waiting = uniqueSignals.filter((s) => {
     const log = forwardLogs.find((l) => l.signalId === s.id);
     return (s.action === "WAIT_PULLBACK" || s.action === "WAIT_RETEST") && (!log || !isTerminalForwardStatus(log.status));
   }).length;
 
-  const risky = signals.filter((s) => {
+  const risky = uniqueSignals.filter((s) => {
     const log = forwardLogs.find((l) => l.signalId === s.id);
-    return ["HIGH_RISK", "BAD_RR", "AVOID"].includes(s.action) || Boolean(log && isTerminalForwardStatus(log.status));
+    return ["HIGH_RISK", "BAD_RR", "AVOID", "NO_TRADE"].includes(s.action) || Boolean(log && isTerminalForwardStatus(log.status));
   }).length;
 
   
@@ -1641,8 +1741,8 @@ export default function App() {
           <b>{risky}</b>
         </Panel>
         <Panel>
-          <div className="muted">Tín hiệu đã lưu</div>
-          <b>{signals.length}</b>
+          <div className="muted">Tín hiệu đang hiển thị</div>
+          <b>{uniqueSignals.length}</b>
         </Panel>
         <Panel>
           <div className="muted">Forward log</div>
@@ -1739,6 +1839,9 @@ export default function App() {
                 </button>
                 <button className="secondary" onClick={clearLearningStats}>
                   Xóa Learning
+                </button>
+                <button className="secondary" onClick={cleanupDuplicateSymbols}>
+                  Dọn trùng symbol
                 </button>
                 <button className="dangerBtn soft" onClick={clearAllLocalData}>
                   Xóa toàn bộ local
@@ -1877,7 +1980,7 @@ export default function App() {
                   {log && (
                     <div className="log">
                       <b>
-                        Forward Test: {viStatus(log.status)} · {log.resultR}R · Entry tính theo Entry tốt nhất
+                        Forward Test: {viStatus(log.status)} · {log.resultR}R · {log.testedAt ? `Test ${time(log.testedAt)}` : "Chưa có testedAt"} · Entry tính theo Entry tốt nhất
                       </b>
                       {log.replay.map((line, i) => (
                         <div key={i}>
