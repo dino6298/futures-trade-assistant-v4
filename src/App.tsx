@@ -313,6 +313,44 @@ function viStatus(s: ForwardStatus) {
   return map[s];
 }
 
+function isTerminalForwardStatus(status?: ForwardStatus) {
+  return status === "TP1_HIT" || status === "TP2_HIT" || status === "SL_HIT" || status === "BE_HIT" || status === "EXPIRED";
+}
+
+function displayAction(signal: Signal, log?: ForwardLog) {
+  if (!log) return viAction(signal.action);
+
+  if (log.status === "SL_HIT") return "Đã chạm SL";
+  if (log.status === "TP1_HIT") return "Đã chạm TP1";
+  if (log.status === "TP2_HIT") return "Đã chạm TP2";
+  if (log.status === "BE_HIT") return "Đã về hòa vốn";
+  if (log.status === "EXPIRED") return "Tín hiệu hết hạn";
+  if (log.status === "NO_ENTRY") return "Chưa khớp Entry tốt nhất";
+  if (log.status === "ENTRY_HIT") return "Đã vào lệnh";
+
+  return viAction(signal.action);
+}
+
+function displayActionTone(
+  signal: Signal,
+  log?: ForwardLog
+): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+  if (!log) {
+    if (signal.action === "ENTRY_OK") return "green";
+    if (signal.action === "HIGH_RISK" || signal.action === "BAD_RR" || signal.action === "AVOID" || signal.action === "NO_TRADE") {
+      return "red";
+    }
+    return "yellow";
+  }
+
+  if (log.status === "TP1_HIT" || log.status === "TP2_HIT" || log.status === "BE_HIT") return "green";
+  if (log.status === "SL_HIT") return "red";
+  if (log.status === "ENTRY_HIT") return "blue";
+  if (log.status === "NO_ENTRY" || log.status === "EXPIRED") return "neutral";
+
+  return "yellow";
+}
+
 function openBinanceFutures(symbol: string) {
   window.open(`https://www.binance.com/vi/futures/${symbol}`, "_blank", "noopener,noreferrer");
 }
@@ -560,8 +598,8 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
   };
 }
 
-function touchEntry(signal: Signal, candle: Candle) {
-  return candle.high >= signal.entryLow && candle.low <= signal.entryHigh;
+function touchBestEntry(signal: Signal, candle: Candle) {
+  return candle.low <= signal.bestEntry && candle.high >= signal.bestEntry;
 }
 
 function touchTp(signal: Signal, candle: Candle, tp: number) {
@@ -621,9 +659,9 @@ function executeRealForwardTest1m(signal: Signal, candles1m: Candle[]): ForwardL
         };
       }
 
-      if (touchEntry(signal, candle)) {
+      if (touchBestEntry(signal, candle)) {
         entered = true;
-        replay.push(`Giá đã chạm vùng entry lúc ${time(candle.time)}.`);
+        replay.push(`Giá đã khớp Entry tốt nhất lúc ${time(candle.time)} tại ${fmt(signal.bestEntry)}.`);
       }
 
       continue;
@@ -704,7 +742,7 @@ function executeRealForwardTest1m(signal: Signal, candles1m: Candle[]): ForwardL
     };
   }
 
-  replay.push("Giá chưa chạm vùng entry.");
+  replay.push("Giá chưa khớp Entry tốt nhất.");
   return {
     signalId: signal.id,
     status: "NO_ENTRY",
@@ -1025,15 +1063,37 @@ export default function App() {
   }
 
   const filtered = signals.filter((s) => {
-    if (filter === "ENTRY") return s.action === "ENTRY_OK";
-    if (filter === "WAIT") return s.action === "WAIT_PULLBACK" || s.action === "WAIT_RETEST";
-    if (filter === "RISK") return ["HIGH_RISK", "BAD_RR", "AVOID", "NO_TRADE"].includes(s.action);
+    const log = forwardLogs.find((l) => l.signalId === s.id);
+
+    if (filter === "ENTRY") {
+      return s.action === "ENTRY_OK" && (!log || !isTerminalForwardStatus(log.status));
+    }
+
+    if (filter === "WAIT") {
+      return (s.action === "WAIT_PULLBACK" || s.action === "WAIT_RETEST") && (!log || !isTerminalForwardStatus(log.status));
+    }
+
+    if (filter === "RISK") {
+      return ["HIGH_RISK", "BAD_RR", "AVOID", "NO_TRADE"].includes(s.action) || Boolean(log && isTerminalForwardStatus(log.status));
+    }
+
     return true;
   });
 
-  const tradeable = signals.filter((s) => s.action === "ENTRY_OK").length;
-  const waiting = signals.filter((s) => s.action === "WAIT_PULLBACK" || s.action === "WAIT_RETEST").length;
-  const risky = signals.filter((s) => ["HIGH_RISK", "BAD_RR", "AVOID"].includes(s.action)).length;
+  const tradeable = signals.filter((s) => {
+    const log = forwardLogs.find((l) => l.signalId === s.id);
+    return s.action === "ENTRY_OK" && (!log || !isTerminalForwardStatus(log.status));
+  }).length;
+
+  const waiting = signals.filter((s) => {
+    const log = forwardLogs.find((l) => l.signalId === s.id);
+    return (s.action === "WAIT_PULLBACK" || s.action === "WAIT_RETEST") && (!log || !isTerminalForwardStatus(log.status));
+  }).length;
+
+  const risky = signals.filter((s) => {
+    const log = forwardLogs.find((l) => l.signalId === s.id);
+    return ["HIGH_RISK", "BAD_RR", "AVOID"].includes(s.action) || Boolean(log && isTerminalForwardStatus(log.status));
+  }).length;
 
   return (
     <div className={darkMode ? "app dark" : "app"}>
@@ -1171,9 +1231,7 @@ export default function App() {
                   <Badge tone={s.grade === "A+" ? "purple" : s.grade === "A" ? "green" : s.grade === "B" ? "blue" : "yellow"}>
                     {s.grade}
                   </Badge>
-                  <Badge tone={s.action === "ENTRY_OK" ? "green" : s.action === "HIGH_RISK" || s.action === "BAD_RR" || s.action === "AVOID" ? "red" : "yellow"}>
-                    {viAction(s.action)}
-                  </Badge>
+                  <Badge tone={displayActionTone(s, log)}>{displayAction(s, log)}</Badge>
                 </div>
               </div>
 
@@ -1234,7 +1292,7 @@ export default function App() {
               {log && (
                 <div className="log">
                   <b>
-                    Forward Test: {viStatus(log.status)} · {log.resultR}R
+                    Forward Test: {viStatus(log.status)} · {log.resultR}R · Entry tính theo Entry tốt nhất
                   </b>
                   {log.replay.map((line, i) => (
                     <div key={i}>
