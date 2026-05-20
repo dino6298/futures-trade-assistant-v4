@@ -753,3 +753,65 @@ body:has(.app.dark) {
   background: #ef4444;
   color: #08111f;
 }
+
+.learningGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.learningCard {
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  padding: 12px;
+}
+
+.learningTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.learningStats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  font-size: 12px;
+}
+
+.learningStats span {
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  padding: 8px;
+}
+
+.app.dark .learningStats span {
+  background: #111a2e;
+}
+
+.guidebook {
+  color: var(--text);
+}
+
+.guidebook h3 {
+  margin: 16px 0 6px;
+}
+
+.guidebook p,
+.guidebook li {
+  color: var(--muted);
+}
+
+@media (max-width: 900px) {
+  .learningGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .learningStats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
