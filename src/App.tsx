@@ -701,9 +701,7 @@ function parseTradableFuturesSymbols(raw: any) {
 
   return raw.symbols
     .filter((item: any) => {
-      const learningStatus = learningEngineStatus(signals, forwardLogs, learningStats);
-
-  return (
+      return (
         item &&
         item.symbol &&
         item.contractType === "PERPETUAL" &&
@@ -2323,6 +2321,8 @@ Tiếp tục đồng bộ?`);
   }).length;
 
   
+  const learningStatus = learningEngineStatus(signals, forwardLogs, learningStats);
+
   return (
     <div className={darkMode ? "app dark" : "app"}>
       <header className="top">
