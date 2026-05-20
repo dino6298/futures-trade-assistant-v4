@@ -281,3 +281,108 @@ pre {
     grid-template-columns: 1fr;
   }
 }
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+body:has(.app.dark) {
+  background: #020617;
+  color: #e5e7eb;
+}
+
+.app {
+  min-height: 100vh;
+}
+
+.smallBtn {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.dangerBtn {
+  background: #b91c1c;
+  color: white;
+}
+
+.dangerBtn.soft {
+  background: #7f1d1d;
+}
+
+.symbolLink {
+  cursor: pointer;
+  display: inline-block;
+}
+
+.symbolLink:hover {
+  text-decoration: underline;
+}
+
+.app.dark {
+  background: #020617;
+  color: #e5e7eb;
+}
+
+.app.dark .panel {
+  background: #0f172a;
+  border-color: #1e293b;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.app.dark .muted,
+.app.dark .top p,
+.app.dark label,
+.app.dark .audit,
+.app.dark .notes,
+.app.dark .log {
+  color: #94a3b8;
+}
+
+.app.dark input,
+.app.dark select {
+  background: #020617;
+  color: #e5e7eb;
+  border-color: #334155;
+}
+
+.app.dark .priceGrid div,
+.app.dark .miniGrid div,
+.app.dark .log {
+  background: #111827;
+}
+
+.app.dark .filters {
+  background: #0f172a;
+}
+
+.app.dark .filters button {
+  color: #e5e7eb;
+}
+
+.app.dark .filters button.active {
+  background: #e5e7eb;
+  color: #020617;
+}
+
+.app.dark button.secondary {
+  background: #020617;
+  color: #e5e7eb;
+  border-color: #334155;
+}
+
+.app.dark pre {
+  background: #020617;
+  color: #d1d5db;
+  border: 1px solid #1e293b;
+}
+
+.app.dark .badge.neutral {
+  background: #1e293b;
+  color: #e5e7eb;
+  border-color: #334155;
+}
