@@ -112,6 +112,7 @@ type ForwardLog = {
   failureReason?: string;
   testedAt?: number;
   forwardRunId?: string;
+  signalSnapshot?: Signal;
   entryHit?: boolean;
   entryHitMinutes?: number;
   maxFavorableR?: number;
@@ -1376,9 +1377,10 @@ function mergeForwardLogsKeepLatest(localLogs: ForwardLog[], remoteLogs: Forward
   return Array.from(merged.values());
 }
 
-function ensureForwardLogMeta(log: ForwardLog, forwardRunId: string, testedAt: number) {
+function ensureForwardLogMeta(log: ForwardLog, signal: Signal, forwardRunId: string, testedAt: number) {
   return {
     ...log,
+    signalSnapshot: log.signalSnapshot || signal,
     forwardRunId: log.forwardRunId || forwardRunId,
     testedAt: log.testedAt || testedAt,
   };
@@ -1448,7 +1450,7 @@ function buildLearningStats(signals: Signal[], logs: ForwardLog[]) {
   }
 
   for (const log of logs) {
-    const signal = signalMap.get(log.signalId);
+    const signal = signalMap.get(log.signalId) || log.signalSnapshot;
     if (!signal) continue;
     if (log.status === "WAITING_ENTRY") continue;
 
@@ -1766,7 +1768,7 @@ export default function App() {
         }
 
         const log = executeRealForwardTest1m(signal, result.candles);
-        logs.push(ensureForwardLogMeta(log, forwardRunId, testedAt));
+        logs.push(ensureForwardLogMeta(log, signal, forwardRunId, testedAt));
       }
 
       if (!logs.length) {
@@ -2114,7 +2116,7 @@ export default function App() {
               <option value={6}>Top 6</option>
               <option value={10}>Top 10</option>
               <option value={20}>Top 20</option>
-              <option value={0}>Tất cả tín hiệu đã lưu</option>
+              <option value={0}>Tất cả signal history</option>
             </select>
           </label>
         </div>
@@ -2179,7 +2181,7 @@ export default function App() {
           ) : (
             <>
               Đang quét <b>{getScanSymbols(config).length}</b> symbol · Forward Test:{" "}
-              <b>{config.forwardTestLimit === 0 ? "tất cả tín hiệu đã lưu" : `top ${config.forwardTestLimit}`}</b>
+              <b>{config.forwardTestLimit === 0 ? "tất cả signal history" : `top ${config.forwardTestLimit}`}</b>
             </>
           )}
         </div>
@@ -2371,7 +2373,7 @@ export default function App() {
                 <p className="muted">Theo dõi các nhóm symbol/setup/regime đang mạnh hay yếu để tool học dần từ Forward Log.</p>
               </div>
             </div>
-            {learningStats.length === 0 && <div className="muted">Chưa có Learning Stats. Hãy chạy Forward Test 1m cho tất cả tín hiệu đã lưu rồi bấm Rebuild Learning.</div>}
+            {learningStats.length === 0 && <div className="muted">Chưa có Learning Stats. Hãy chạy Forward Test 1m cho tất cả signal history rồi bấm Rebuild Learning. Log cũ không có signalSnapshot có thể không học đủ nếu signal gốc đã bị xóa.</div>}
             {learningStats.length > 0 && (
               <div className="learningGrid compact">
                 {learningStats.slice(0, 6).map((stat) => (
