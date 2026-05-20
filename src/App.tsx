@@ -3,7 +3,7 @@ import React, { useEffect, useState } from "react";
 type Side = "LONG" | "SHORT" | "NEUTRAL";
 type RiskMode = "SAFE" | "NORMAL" | "AGGRESSIVE";
 type DataSourceMode = "MOCK" | "BINANCE_DIRECT" | "WORKER_PROXY";
-type SymbolScanMode = "CORE" | "EXTENDED" | "CUSTOM";
+type SymbolScanMode = "CORE" | "EXTENDED" | "CUSTOM" | "AUTO_SAFE";
 type ForwardStatus =
   | "NO_ENTRY"
   | "EXPIRED"
@@ -45,6 +45,14 @@ type Candle = {
   volume: number;
 };
 
+type Ticker24h = {
+  symbol: string;
+  lastPrice: number;
+  quoteVolume: number;
+  priceChangePercent: number;
+  count: number;
+};
+
 type AppConfig = {
   capital: number;
   riskMode: RiskMode;
@@ -57,6 +65,9 @@ type AppConfig = {
   symbolScanMode: SymbolScanMode;
   customSymbolsText: string;
   forwardTestLimit: number;
+  autoUniverseLimit: number;
+  autoMinQuoteVolume: number;
+  autoMaxAbsChangePct: number;
 };
 
 type SymbolRule = {
@@ -243,6 +254,9 @@ const DEFAULT_CONFIG: AppConfig = {
   symbolScanMode: "CORE",
   customSymbolsText: CORE_SYMBOLS.join(", "),
   forwardTestLimit: 6,
+  autoUniverseLimit: 30,
+  autoMinQuoteVolume: 50000000,
+  autoMaxAbsChangePct: 18,
 };
 
 const SCHEMA_SQL = `
@@ -296,55 +310,116 @@ const WORKER_CODE = `
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname !== "/klines") return new Response("Not found", { status: 404 });
 
-    const symbol = url.searchParams.get("symbol") || "BTCUSDT";
-    const interval = url.searchParams.get("interval") || "1m";
-    const limit = Math.min(Number(url.searchParams.get("limit") || 240), 1000);
-
-    const cacheKey = new Request(request.url, request);
-    const cached = await caches.default.match(cacheKey);
-    if (cached) return cached;
-
-    const binanceUrl =
-      "https://fapi.binance.com/fapi/v1/klines?symbol=" +
-      symbol +
-      "&interval=" +
-      interval +
-      "&limit=" +
-      limit;
-
-    const res = await fetch(binanceUrl);
-
-    if (!res.ok) {
-      return new Response(JSON.stringify({ error: "Binance error", status: res.status }), {
-        status: 502,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-      });
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders() });
     }
 
-    const raw = await res.json();
-    const data = raw.map((k) => ({
-      time: Number(k[0]),
-      open: Number(k[1]),
-      high: Number(k[2]),
-      low: Number(k[3]),
-      close: Number(k[4]),
-      volume: Number(k[5]),
-    }));
+    try {
+      if (url.pathname === "/klines") return await handleKlines(request, url, ctx);
+      if (url.pathname === "/exchangeInfo") return await handleProxy(request, "/fapi/v1/exchangeInfo", 3600, ctx);
+      if (url.pathname === "/ticker24hr") return await handleProxy(request, "/fapi/v1/ticker/24hr", 30, ctx);
+      if (url.pathname === "/fapi/v1/exchangeInfo") return await handleProxy(request, "/fapi/v1/exchangeInfo", 3600, ctx);
+      if (url.pathname === "/fapi/v1/ticker/24hr") return await handleProxy(request, "/fapi/v1/ticker/24hr", 30, ctx);
 
-    const out = new Response(JSON.stringify(data), {
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Cache-Control": "public, max-age=15",
-      },
-    });
-
-    ctx.waitUntil(caches.default.put(cacheKey, out.clone()));
-    return out;
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: { ...corsHeaders(), "Content-Type": "application/json" },
+      });
+    } catch (err) {
+      return new Response(
+        JSON.stringify({
+          error: "Worker runtime error",
+          detail: err instanceof Error ? err.message : String(err),
+        }),
+        { status: 500, headers: { ...corsHeaders(), "Content-Type": "application/json" } }
+      );
+    }
   },
 };
+
+async function handleKlines(request, url, ctx) {
+  const symbol = (url.searchParams.get("symbol") || "BTCUSDT").toUpperCase();
+  const interval = url.searchParams.get("interval") || "1m";
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 240), 1), 1000);
+
+  return handleProxy(
+    request,
+    "/fapi/v1/klines?symbol=" +
+      encodeURIComponent(symbol) +
+      "&interval=" +
+      encodeURIComponent(interval) +
+      "&limit=" +
+      encodeURIComponent(String(limit)),
+    15,
+    ctx,
+    (raw) =>
+      raw.map((k) => ({
+        time: Number(k[0]),
+        open: Number(k[1]),
+        high: Number(k[2]),
+        low: Number(k[3]),
+        close: Number(k[4]),
+        volume: Number(k[5]),
+      }))
+  );
+}
+
+async function handleProxy(request, path, maxAge, ctx, transform) {
+  const cacheKey = new Request(new URL(request.url).toString(), request);
+  const cached = await caches.default.match(cacheKey);
+  if (cached) return cached;
+
+  const raw = await fetchFromBinance(path);
+  const data = transform ? transform(raw) : raw;
+  const out = jsonResponse(data, maxAge);
+  ctx.waitUntil(caches.default.put(cacheKey, out.clone()));
+  return out;
+}
+
+async function fetchFromBinance(path) {
+  const endpoints = ["https://fapi.binance.com", "https://fapi1.binance.com", "https://fapi2.binance.com", "https://fapi3.binance.com"];
+  const errors = [];
+
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint + path, {
+        headers: { "User-Agent": "Mozilla/5.0 CloudflareWorker FuturesTradeAssistantV4", Accept: "application/json" },
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        errors.push(endpoint + " -> " + res.status + " " + text.slice(0, 160));
+        continue;
+      }
+
+      return await res.json();
+    } catch (err) {
+      errors.push(endpoint + " -> " + (err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  throw new Error("All Binance futures endpoints failed: " + errors.join(" | "));
+}
+
+function jsonResponse(data, maxAge) {
+  return new Response(JSON.stringify(data), {
+    status: 200,
+    headers: {
+      ...corsHeaders(),
+      "Content-Type": "application/json",
+      "Cache-Control": "public, max-age=" + maxAge,
+    },
+  });
+}
+
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  };
+}
 `.trim();
 
 function intervalMs(tf: string) {
@@ -561,17 +636,86 @@ function parseSymbolRules(raw: any): Record<string, SymbolRule> {
   return out;
 }
 
+
+function parseTradableFuturesSymbols(raw: any) {
+  if (!raw || !Array.isArray(raw.symbols)) return [];
+
+  return raw.symbols
+    .filter((item: any) => {
+      return (
+        item &&
+        item.symbol &&
+        item.contractType === "PERPETUAL" &&
+        item.status === "TRADING" &&
+        item.quoteAsset === "USDT" &&
+        item.symbol.endsWith("USDT")
+      );
+    })
+    .map((item: any) => String(item.symbol));
+}
+
+function normalizeTicker24h(row: any): Ticker24h {
+  return {
+    symbol: String(row.symbol || ""),
+    lastPrice: Number(row.lastPrice || 0),
+    quoteVolume: Number(row.quoteVolume || 0),
+    priceChangePercent: Number(row.priceChangePercent || 0),
+    count: Number(row.count || 0),
+  };
+}
+
+async function fetchBinanceJson(config: AppConfig, path: string) {
+  if (config.dataSourceMode === "WORKER_PROXY") {
+    const res = await fetch(`${config.workerProxyUrl.replace(/\/$/, "")}${path}`);
+    if (!res.ok) throw new Error(`Worker API lỗi ${res.status}`);
+    return res.json();
+  }
+
+  const res = await fetch(`https://fapi.binance.com${path}`);
+  if (!res.ok) throw new Error(`Binance API lỗi ${res.status}`);
+  return res.json();
+}
+
+async function fetchAutoSafeUniverse(config: AppConfig) {
+  if (config.dataSourceMode === "MOCK") return EXTENDED_SYMBOLS.slice(0, config.autoUniverseLimit);
+
+  const [exchangeInfo, tickerRaw] = await Promise.all([
+    fetchBinanceJson(config, "/fapi/v1/exchangeInfo"),
+    fetchBinanceJson(config, "/fapi/v1/ticker/24hr"),
+  ]);
+
+  const tradable = new Set(parseTradableFuturesSymbols(exchangeInfo));
+  const minVolume = Math.max(0, config.autoMinQuoteVolume || 0);
+  const maxAbsChange = Math.max(1, config.autoMaxAbsChangePct || DEFAULT_CONFIG.autoMaxAbsChangePct);
+
+  const ranked = (Array.isArray(tickerRaw) ? tickerRaw : [])
+    .map(normalizeTicker24h)
+    .filter((ticker) => {
+      if (!ticker.symbol.endsWith("USDT")) return false;
+      if (!tradable.has(ticker.symbol)) return false;
+      if (!Number.isFinite(ticker.lastPrice) || ticker.lastPrice <= 0) return false;
+      if (!Number.isFinite(ticker.quoteVolume) || ticker.quoteVolume < minVolume) return false;
+      if (!Number.isFinite(ticker.priceChangePercent)) return false;
+      if (Math.abs(ticker.priceChangePercent) > maxAbsChange) return false;
+      return true;
+    })
+    .sort((a, b) => b.quoteVolume - a.quoteVolume)
+    .map((ticker) => ticker.symbol);
+
+  const merged = uniqueList([...CORE_SYMBOLS, ...ranked]);
+  return merged.slice(0, Math.max(CORE_SYMBOLS.length, config.autoUniverseLimit || DEFAULT_CONFIG.autoUniverseLimit));
+}
+
+async function resolveScanSymbols(config: AppConfig) {
+  if (config.symbolScanMode === "AUTO_SAFE") return fetchAutoSafeUniverse(config);
+  return uniqueList(getScanSymbols(config));
+}
+
 async function fetchSymbolRules(config: AppConfig): Promise<Record<string, SymbolRule>> {
   try {
-    const url =
-      config.dataSourceMode === "WORKER_PROXY"
-        ? `${config.workerProxyUrl.replace(/\/$/, "")}/exchangeInfo`
-        : "https://fapi.binance.com/fapi/v1/exchangeInfo";
+    if (config.dataSourceMode === "MOCK") return { ...FALLBACK_SYMBOL_RULES };
 
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`exchangeInfo lỗi ${res.status}`);
-
-    const raw = await res.json();
+    const raw = await fetchBinanceJson(config, "/fapi/v1/exchangeInfo");
     const parsed = parseSymbolRules(raw);
 
     return { ...FALLBACK_SYMBOL_RULES, ...parsed };
@@ -628,7 +772,15 @@ async function fetchCandles(
       : `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
 
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`API lỗi ${res.status}`);
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = await res.text();
+    } catch {
+      detail = "";
+    }
+    throw new Error(`API lỗi ${res.status} ${symbol} ${interval}${detail ? ` - ${detail.slice(0, 140)}` : ""}`);
+  }
 
   const raw = await res.json();
   if (!Array.isArray(raw)) throw new Error("Dữ liệu API không hợp lệ");
@@ -1152,6 +1304,100 @@ function keepLatestSignalPerSymbol(inputSignals: Signal[]) {
 }
 
 
+
+function getForwardLogTime(log: ForwardLog) {
+  return log.testedAt || 0;
+}
+
+function forwardStatusRank(status: ForwardStatus) {
+  const rank: Record<ForwardStatus, number> = {
+    WAITING_ENTRY: 0,
+    NO_ENTRY: 1,
+    EXPIRED: 2,
+    ENTRY_HIT: 3,
+    BE_HIT: 4,
+    SL_HIT: 5,
+    TP1_HIT: 6,
+    TP2_HIT: 7,
+  };
+
+  return rank[status] ?? 0;
+}
+
+function pickLatestForwardLog(a: ForwardLog, b: ForwardLog) {
+  const aTime = getForwardLogTime(a);
+  const bTime = getForwardLogTime(b);
+
+  if (bTime > aTime) return b;
+  if (aTime > bTime) return a;
+
+  const aRank = forwardStatusRank(a.status);
+  const bRank = forwardStatusRank(b.status);
+
+  return bRank >= aRank ? b : a;
+}
+
+function mergeForwardLogsKeepLatest(localLogs: ForwardLog[], remoteLogs: ForwardLog[]) {
+  const merged = new Map<string, ForwardLog>();
+
+  for (const remote of remoteLogs) {
+    if (!remote?.signalId) continue;
+    merged.set(remote.signalId, remote);
+  }
+
+  for (const local of localLogs) {
+    if (!local?.signalId) continue;
+
+    const existing = merged.get(local.signalId);
+
+    if (!existing) {
+      merged.set(local.signalId, local);
+      continue;
+    }
+
+    merged.set(local.signalId, pickLatestForwardLog(existing, local));
+  }
+
+  return Array.from(merged.values());
+}
+
+function ensureForwardLogMeta(log: ForwardLog, forwardRunId: string, testedAt: number) {
+  return {
+    ...log,
+    forwardRunId: log.forwardRunId || forwardRunId,
+    testedAt: log.testedAt || testedAt,
+  };
+}
+
+function mergeSignalsLocalWins(localSignals: Signal[], remoteSignals: Signal[]) {
+  const merged = new Map<string, Signal>();
+
+  for (const remote of remoteSignals) {
+    if (!remote?.id) continue;
+    merged.set(remote.id, remote);
+  }
+
+  for (const local of localSignals) {
+    if (!local?.id) continue;
+    merged.set(local.id, local);
+  }
+
+  return keepLatestSignalPerSymbol(Array.from(merged.values()));
+}
+
+async function fetchCandlesSafe(config: AppConfig, symbol: string, interval: string, limit = 240) {
+  try {
+    const candles = await fetchCandles(config, symbol, interval, limit);
+    return { symbol, candles, error: "" };
+  } catch (err) {
+    return {
+      symbol,
+      candles: [] as Candle[],
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 function isWinningLog(log: ForwardLog) {
   return log.status === "TP1_HIT" || log.status === "TP2_HIT" || log.status === "BE_HIT" || log.resultR > 0;
 }
@@ -1391,6 +1637,9 @@ export default function App() {
         symbolScanMode: saved.config.symbolScanMode || DEFAULT_CONFIG.symbolScanMode,
         customSymbolsText: saved.config.customSymbolsText || DEFAULT_CONFIG.customSymbolsText,
         forwardTestLimit: saved.config.forwardTestLimit ?? DEFAULT_CONFIG.forwardTestLimit,
+        autoUniverseLimit: saved.config.autoUniverseLimit ?? DEFAULT_CONFIG.autoUniverseLimit,
+        autoMinQuoteVolume: saved.config.autoMinQuoteVolume ?? DEFAULT_CONFIG.autoMinQuoteVolume,
+        autoMaxAbsChangePct: saved.config.autoMaxAbsChangePct ?? DEFAULT_CONFIG.autoMaxAbsChangePct,
       });
     }
 
@@ -1428,35 +1677,52 @@ export default function App() {
     try {
       setApiStatus("Đang lấy dữ liệu...");
 
-      const scanSymbols = uniqueList(getScanSymbols(config));
+      const scanSymbols = await resolveScanSymbols(config);
       const [btcCandles, symbolRules] = await Promise.all([
         fetchCandles(config, "BTCUSDT", config.timeframe, 240),
         fetchSymbolRules(config),
       ]);
       const btcBias = inferBtcBias(btcCandles);
       const out: Signal[] = [];
+      const failedSymbols: string[] = [];
 
       for (const symbol of scanSymbols) {
-        const candles = symbol === "BTCUSDT" ? btcCandles : await fetchCandles(config, symbol, config.timeframe, 240);
-        out.push(buildSignal(symbol, candles, btcBias, config, symbolRules));
+        if (symbol === "BTCUSDT") {
+          out.push(buildSignal(symbol, btcCandles, btcBias, config, symbolRules));
+          continue;
+        }
+
+        const result = await fetchCandlesSafe(config, symbol, config.timeframe, 240);
+
+        if (!result.candles.length) {
+          failedSymbols.push(`${symbol}: ${result.error}`);
+          continue;
+        }
+
+        out.push(buildSignal(symbol, result.candles, btcBias, config, symbolRules));
+      }
+
+      if (!out.length) {
+        throw new Error(`Không phân tích được symbol nào. Lỗi đầu tiên: ${failedSymbols[0] || "không rõ"}`);
       }
 
       const learningNow = buildLearningStats(signals, forwardLogs);
       const learnedOut = out.map((signal) => applyLearningToSignal(signal, learningNow));
       const sorted = keepLatestSignalPerSymbol(learnedOut);
       setLearningStats(buildLearningStats(sorted, forwardLogs));
+      const failText = failedSymbols.length ? ` Bỏ qua ${failedSymbols.length} symbol lỗi.` : "";
       const newAudit = [
         {
           id: `${Date.now()}`,
           at: Date.now(),
-          message: `Đã phân tích ${sorted.length}/${scanSymbols.length} symbol qua ${config.dataSourceMode}. Ký quỹ được tính theo rule riêng từng symbol. Màn hình chính chỉ giữ 1 tín hiệu mới nhất cho mỗi symbol.`,
+          message: `Đã phân tích ${sorted.length}/${scanSymbols.length} symbol qua ${config.dataSourceMode}.${failText} Ký quỹ được tính theo rule riêng từng symbol. Màn hình chính chỉ giữ 1 tín hiệu mới nhất cho mỗi symbol.`,
         },
         ...auditLogs,
       ].slice(0, 100);
 
       setSignals(sorted);
       setAuditLogs(newAudit);
-      setApiStatus("API ổn");
+      setApiStatus(failedSymbols.length ? `API ổn một phần · bỏ qua ${failedSymbols.length} symbol lỗi` : "API ổn");
       persist(sorted, forwardLogs, newAudit);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Lỗi không xác định";
@@ -1472,21 +1738,32 @@ export default function App() {
     try {
       setApiStatus("Đang chạy Forward Test 1m...");
       const logs: ForwardLog[] = [];
+      const testedAt = Date.now();
+      const forwardRunId = `FT_${testedAt}`;
+      const forwardFailures: string[] = [];
 
       for (const signal of getForwardTestSignals(signals, config.forwardTestLimit)) {
-        const candles1m = await fetchCandles(config, signal.symbol, "1m", 1000);
-        logs.push(executeRealForwardTest1m(signal, candles1m));
+        const result = await fetchCandlesSafe(config, signal.symbol, "1m", 1000);
+
+        if (!result.candles.length) {
+          forwardFailures.push(`${signal.symbol}: ${result.error}`);
+          continue;
+        }
+
+        const log = executeRealForwardTest1m(signal, result.candles);
+        logs.push(ensureForwardLogMeta(log, forwardRunId, testedAt));
       }
 
-      const merged = new Map(forwardLogs.map((l) => [l.signalId, l]));
-      logs.forEach((l) => merged.set(l.signalId, l));
+      if (!logs.length) {
+        throw new Error(`Không chạy được Forward Test cho symbol nào. Lỗi đầu tiên: ${forwardFailures[0] || "không rõ"}`);
+      }
 
-      const nextLogs = Array.from(merged.values());
+      const nextLogs = mergeForwardLogsKeepLatest(forwardLogs, logs);
       const newAudit = [
         {
           id: `${Date.now()}`,
           at: Date.now(),
-          message: `Đã chạy Forward Test thật bằng nến 1m cho ${getForwardTestSignals(signals, config.forwardTestLimit).length} tín hiệu`,
+          message: `Đã chạy Forward Test thật bằng nến 1m cho ${logs.length}/${getForwardTestSignals(signals, config.forwardTestLimit).length} tín hiệu${forwardFailures.length ? `. Bỏ qua ${forwardFailures.length} symbol lỗi.` : ""}`,
         },
         ...auditLogs,
       ].slice(0, 100);
@@ -1495,7 +1772,7 @@ export default function App() {
       setForwardLogs(nextLogs);
       setLearningStats(nextLearningStats);
       setAuditLogs(newAudit);
-      setApiStatus("Forward Test 1m hoàn tất");
+      setApiStatus(forwardFailures.length ? `Forward Test hoàn tất một phần · bỏ qua ${forwardFailures.length}` : "Forward Test 1m hoàn tất");
       persist(signals, nextLogs, newAudit);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Lỗi Forward Test 1m";
@@ -1509,24 +1786,21 @@ export default function App() {
 
   async function syncCloud() {
     try {
-      setSyncStatus("Đang kéo dữ liệu cloud...");
+      setSyncStatus("Đang kéo cloud và giữ local ưu tiên...");
+
+      const localSignalsSnapshot = [...signals];
+      const localForwardLogsSnapshot = [...forwardLogs];
 
       const remote = await pullSupabase(config);
-      const byId = new Map<string, Signal>();
 
-      [...(remote.signals || []), ...signals].forEach((s) => byId.set(s.id, s));
-
-      const logById = new Map<string, ForwardLog>();
-      [...(remote.forwardLogs || []), ...forwardLogs].forEach((l) => logById.set(l.signalId, l));
-
-      const nextSignals = keepLatestSignalPerSymbol(Array.from(byId.values()));
-      const nextLogs = Array.from(logById.values());
+      const nextSignals = mergeSignalsLocalWins(localSignalsSnapshot, remote.signals || []);
+      const nextLogs = mergeForwardLogsKeepLatest(localForwardLogsSnapshot, remote.forwardLogs || []);
       const nextAudit = [
         { id: `${Date.now()}`, at: Date.now(), message: "Đã kéo dữ liệu trước khi đẩy lên cloud" },
         ...auditLogs,
       ].slice(0, 100);
 
-      setSyncStatus("Đang đẩy dữ liệu cloud...");
+      setSyncStatus("Đang ghi dữ liệu đã gộp lên cloud...");
 
       await pushSupabase(config, {
         signals: nextSignals,
@@ -1543,7 +1817,7 @@ export default function App() {
       setLearningStats(nextLearningStats);
       setAuditLogs(nextAudit);
       persist(nextSignals, nextLogs, nextAudit);
-      setSyncStatus("Đã đồng bộ");
+      setSyncStatus("Đã đồng bộ an toàn");
     } catch (err) {
       setSyncStatus(err instanceof Error ? `Lỗi đồng bộ: ${err.message}` : "Lỗi đồng bộ");
     }
@@ -1812,6 +2086,7 @@ export default function App() {
             >
               <option value="CORE">Core Scan ({CORE_SYMBOLS.length})</option>
               <option value="EXTENDED">Extended Scan ({EXTENDED_SYMBOLS.length})</option>
+              <option value="AUTO_SAFE">Auto Safe Universe</option>
               <option value="CUSTOM">Custom Scan</option>
             </select>
           </label>
@@ -1845,9 +2120,53 @@ export default function App() {
           </label>
         )}
 
+
+        {config.symbolScanMode === "AUTO_SAFE" && (
+          <div className="autoUniverseGrid">
+            <label>
+              Auto Universe Limit
+              <input
+                type="number"
+                min={8}
+                max={80}
+                value={config.autoUniverseLimit}
+                onChange={(e) => setConfig({ ...config, autoUniverseLimit: Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              Min 24h Quote Volume
+              <input
+                type="number"
+                min={0}
+                step={1000000}
+                value={config.autoMinQuoteVolume}
+                onChange={(e) => setConfig({ ...config, autoMinQuoteVolume: Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              Max 24h Change %
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={config.autoMaxAbsChangePct}
+                onChange={(e) => setConfig({ ...config, autoMaxAbsChangePct: Number(e.target.value) })}
+              />
+            </label>
+          </div>
+        )}
+
         <div className="scanSummary">
-          Đang quét <b>{getScanSymbols(config).length}</b> symbol · Forward Test:{" "}
-          <b>{config.forwardTestLimit === 0 ? "toàn bộ" : `top ${config.forwardTestLimit}`}</b>
+          {config.symbolScanMode === "AUTO_SAFE" ? (
+            <>
+              Auto Safe Universe: lấy trực tiếp từ Binance 24h ticker + exchangeInfo, lọc theo volume và biên độ giá.
+            </>
+          ) : (
+            <>
+              Đang quét <b>{getScanSymbols(config).length}</b> symbol · Forward Test:{" "}
+              <b>{config.forwardTestLimit === 0 ? "toàn bộ" : `top ${config.forwardTestLimit}`}</b>
+            </>
+          )}
         </div>
 
         <div className="primaryActions">

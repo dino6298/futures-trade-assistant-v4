@@ -987,3 +987,18 @@ body:has(.app.dark) {
     grid-template-columns: repeat(7, minmax(0, 1fr));
   }
 }
+
+
+
+.autoUniverseGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 10px 0 12px;
+}
+
+@media (max-width: 900px) {
+  .autoUniverseGrid {
+    grid-template-columns: 1fr;
+  }
+}
