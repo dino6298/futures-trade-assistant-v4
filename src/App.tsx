@@ -117,6 +117,8 @@ const SYMBOLS = [
 ];
 
 const LOCAL_KEY = "fta_v4_standalone_state";
+const MIN_MARGIN_USDT = 5.5;
+const MIN_NOTIONAL_USDT = 5;
 
 const DEFAULT_CONFIG: AppConfig = {
   capital: 15,
@@ -351,6 +353,21 @@ function displayActionTone(
   return "yellow";
 }
 
+function orderCompatibilityWarnings(signal: Signal) {
+  const warnings: string[] = [];
+  const notional = signal.margin * signal.leverage;
+
+  if (signal.margin < MIN_MARGIN_USDT) {
+    warnings.push(`Ký quỹ thấp hơn ${MIN_MARGIN_USDT} USDT/lệnh.`);
+  }
+
+  if (notional < MIN_NOTIONAL_USDT) {
+    warnings.push(`Notional thấp hơn ${MIN_NOTIONAL_USDT} USDT.`);
+  }
+
+  return warnings;
+}
+
 function openBinanceFutures(symbol: string) {
   window.open(`https://www.binance.com/vi/futures/${symbol}`, "_blank", "noopener,noreferrer");
 }
@@ -533,6 +550,9 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
 
   if (regime === "HIGH_VOLATILITY") warnings.push("Thị trường biến động mạnh, nên giảm đòn bẩy.");
   if (regime === "CHOPPY") warnings.push("Thị trường nhiễu, ưu tiên chờ entry đẹp.");
+  if (config.capital / Math.max(config.maxActiveTrades, 1) < MIN_MARGIN_USDT) {
+    warnings.push(`Vốn chia theo số lệnh hiện tại thấp hơn ${MIN_MARGIN_USDT} USDT/lệnh. Tool đã nâng ký quỹ tối thiểu lên ${MIN_MARGIN_USDT} USDT để tránh lỗi nhập lệnh.`);
+  }
   if (rr < 1.2) blocks.push("RR_XAU");
   if (side === "LONG" && btcBias === "BTC_DUMP_RISK") blocks.push("BTC_DUMP_CHAN_LONG");
   if (side === "SHORT" && btcBias === "BTC_PUMP_RISK") blocks.push("BTC_PUMP_CHAN_SHORT");
@@ -557,7 +577,8 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
 
   const maxLev = config.riskMode === "AGGRESSIVE" ? 40 : config.riskMode === "NORMAL" ? 30 : 20;
   const leverage = grade === "A+" ? maxLev : grade === "A" ? Math.min(maxLev, 25) : Math.min(maxLev, 15);
-  const margin = Math.max(3, Math.min(config.capital / Math.max(config.maxActiveTrades, 1), config.capital * 0.55));
+  const suggestedBudgetPerTrade = config.capital / Math.max(config.maxActiveTrades, 1);
+  const margin = Math.max(MIN_MARGIN_USDT, suggestedBudgetPerTrade);
   const riskUsdt =
     grade === "NO_TRADE"
       ? 0
@@ -1211,6 +1232,7 @@ export default function App() {
       <section className="signals">
         {filtered.map((s) => {
           const log = forwardLogs.find((l) => l.signalId === s.id);
+          const orderWarnings = orderCompatibilityWarnings(s);
 
           return (
             <Panel key={s.id} className="signal">
@@ -1272,6 +1294,14 @@ export default function App() {
                   RR <b>{s.rr}</b>
                 </div>
               </div>
+
+              {orderWarnings.length > 0 && (
+                <div className="log danger">
+                  {orderWarnings.map((warning, index) => (
+                    <div key={index}>⚠ {warning}</div>
+                  ))}
+                </div>
+              )}
 
               <div className="notes">
                 {s.reasons.map((r, i) => (
