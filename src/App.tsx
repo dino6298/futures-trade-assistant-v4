@@ -479,6 +479,30 @@ function getForwardTestSignals(signals: Signal[], limit: number) {
   return keepLatestSignalPerSymbol(signals).slice(0, limit);
 }
 
+function isUnresolvedForwardLog(log: ForwardLog) {
+  return log.status === "NO_ENTRY" || log.status === "ENTRY_HIT" || log.status === "WAITING_ENTRY";
+}
+
+function getForwardTestTargets(signals: Signal[], forwardLogs: ForwardLog[], limit: number) {
+  if (limit === -1) {
+    const signalMap = new Map(signals.map((signal) => [signal.id, signal]));
+    const targets: Signal[] = [];
+
+    for (const log of forwardLogs) {
+      if (!isUnresolvedForwardLog(log)) continue;
+
+      const signal = signalMap.get(log.signalId) || log.signalSnapshot;
+      if (!signal) continue;
+
+      targets.push(signal);
+    }
+
+    return uniqueSignalsById(targets);
+  }
+
+  return getForwardTestSignals(signals, limit);
+}
+
 function basePrice(symbol: string) {
   const map: Record<string, number> = {
     BTCUSDT: 100000,
@@ -1758,8 +1782,9 @@ export default function App() {
       const testedAt = Date.now();
       const forwardRunId = `FT_${testedAt}`;
       const forwardFailures: string[] = [];
+      const forwardTargets = getForwardTestTargets(signals, forwardLogs, config.forwardTestLimit);
 
-      for (const signal of getForwardTestSignals(signals, config.forwardTestLimit)) {
+      for (const signal of forwardTargets) {
         const result = await fetchCandlesSafe(config, signal.symbol, "1m", 1000);
 
         if (!result.candles.length) {
@@ -1780,7 +1805,7 @@ export default function App() {
         {
           id: `${Date.now()}`,
           at: Date.now(),
-          message: `Đã chạy Forward Test thật bằng nến 1m cho ${logs.length}/${getForwardTestSignals(signals, config.forwardTestLimit).length} tín hiệu ${config.forwardTestLimit === 0 ? "đã lưu" : "được chọn"}${forwardFailures.length ? `. Bỏ qua ${forwardFailures.length} symbol lỗi.` : ""}`,
+          message: `Đã chạy Forward Test thật bằng nến 1m cho ${logs.length}/${forwardTargets.length} tín hiệu ${config.forwardTestLimit === -1 ? "từ log chưa TP/SL" : config.forwardTestLimit === 0 ? "đã lưu" : "được chọn"}${forwardFailures.length ? `. Bỏ qua ${forwardFailures.length} symbol lỗi.` : ""}`,
         },
         ...auditLogs,
       ].slice(0, 100);
@@ -2117,6 +2142,7 @@ export default function App() {
               <option value={10}>Top 10</option>
               <option value={20}>Top 20</option>
               <option value={0}>Tất cả signal history</option>
+              <option value={-1}>Tất cả log chưa TP/SL</option>
             </select>
           </label>
         </div>
@@ -2181,7 +2207,7 @@ export default function App() {
           ) : (
             <>
               Đang quét <b>{getScanSymbols(config).length}</b> symbol · Forward Test:{" "}
-              <b>{config.forwardTestLimit === 0 ? "tất cả signal history" : `top ${config.forwardTestLimit}`}</b>
+              <b>{config.forwardTestLimit === -1 ? "tất cả log chưa TP/SL" : config.forwardTestLimit === 0 ? "tất cả signal history" : `top ${config.forwardTestLimit}`}</b>
             </>
           )}
         </div>
