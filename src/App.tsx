@@ -1663,6 +1663,7 @@ export default function App() {
   const [journalNote, setJournalNote] = useState("");
   const [showGuidebook, setShowGuidebook] = useState(false);
   const [showUtilities, setShowUtilities] = useState(false);
+  const [cloudWipeMode, setCloudWipeMode] = useState<"" | "forwardLogs" | "all">("");
   const [darkMode, setDarkMode] = useState(false);
 
   useEffect(() => {
@@ -1826,19 +1827,53 @@ export default function App() {
     }
   }
 
+
+  function hasCloudWipePending() {
+    return cloudWipeMode !== "";
+  }
+
+  function cloudWipeMessage() {
+    if (cloudWipeMode === "forwardLogs") {
+      return "Bạn vừa xóa Forward Log cloud. Nếu bấm Đồng bộ ngay, tool sẽ push trạng thái Forward Log rỗng từ local lên cloud, không kéo log cũ về.";
+    }
+
+    if (cloudWipeMode === "all") {
+      return "Bạn vừa xóa toàn bộ cloud. Nếu bấm Đồng bộ ngay, tool sẽ push trạng thái local hiện tại lên cloud.";
+    }
+
+    return "";
+  }
+
   async function syncCloud() {
     try {
-      setSyncStatus("Đang kéo cloud và giữ local ưu tiên...");
-
       const localSignalsSnapshot = [...signals];
       const localForwardLogsSnapshot = [...forwardLogs];
 
-      const remote = await pullSupabase(config);
+      let nextSignals = keepLatestSignalPerSymbol(localSignalsSnapshot);
+      let nextLogs = localForwardLogsSnapshot;
+      let syncMessage = "Đã kéo dữ liệu trước khi đẩy lên cloud";
 
-      const nextSignals = mergeSignalsLocalWins(localSignalsSnapshot, remote.signals || []);
-      const nextLogs = mergeForwardLogsKeepLatest(localForwardLogsSnapshot, remote.forwardLogs || []);
+      if (hasCloudWipePending()) {
+        const confirmed = window.confirm(`${cloudWipeMessage()}
+
+Tiếp tục đồng bộ?`);
+        if (!confirmed) return;
+
+        setSyncStatus("Đang ghi trạng thái local sau khi xóa cloud...");
+        syncMessage = cloudWipeMode === "forwardLogs"
+          ? "Đã push trạng thái Forward Log rỗng lên cloud sau khi xóa"
+          : "Đã push trạng thái local lên cloud sau khi xóa toàn bộ cloud";
+      } else {
+        setSyncStatus("Đang kéo cloud và giữ local ưu tiên...");
+
+        const remote = await pullSupabase(config);
+
+        nextSignals = mergeSignalsLocalWins(localSignalsSnapshot, remote.signals || []);
+        nextLogs = mergeForwardLogsKeepLatest(localForwardLogsSnapshot, remote.forwardLogs || []);
+      }
+
       const nextAudit = [
-        { id: `${Date.now()}`, at: Date.now(), message: "Đã kéo dữ liệu trước khi đẩy lên cloud" },
+        { id: `${Date.now()}`, at: Date.now(), message: syncMessage },
         ...auditLogs,
       ].slice(0, 100);
 
@@ -1859,6 +1894,7 @@ export default function App() {
       setLearningStats(nextLearningStats);
       setAuditLogs(nextAudit);
       persist(nextSignals, nextLogs, nextAudit);
+      setCloudWipeMode("");
       setSyncStatus("Đã đồng bộ an toàn");
     } catch (err) {
       setSyncStatus(err instanceof Error ? `Lỗi đồng bộ: ${err.message}` : "Lỗi đồng bộ");
@@ -1903,12 +1939,66 @@ export default function App() {
       setForwardLogs([]);
       setAuditLogs(newAudit);
       persist(signals, [], newAudit);
-      setSyncStatus("Đã xóa Forward Log cloud/local");
+      setCloudWipeMode("forwardLogs");
+      setSyncStatus("Đã xóa Forward Log cloud/local. Bấm Đồng bộ Supabase để push trạng thái Forward Log rỗng lên cloud.");
     } catch (err) {
       setSyncStatus(err instanceof Error ? `Lỗi xóa log cloud: ${err.message}` : "Lỗi xóa log cloud");
     }
   }
 
+
+
+  async function clearAllCloudData() {
+    try {
+      const confirmed = window.confirm(
+        "Xóa toàn bộ dữ liệu cloud gồm Signals, Forward Logs, Settings và Audit Logs? Dữ liệu local trên máy này sẽ được giữ nguyên. Sau đó nếu bấm Đồng bộ, local hiện tại sẽ được push lại lên cloud."
+      );
+
+      if (!confirmed) return;
+
+      setSyncStatus("Đang xóa toàn bộ cloud...");
+
+      if (config.supabaseUrl && config.supabaseAnonKey) {
+        const base = config.supabaseUrl.replace(/\/$/, "");
+        const tables = [
+          "fta_forward_logs?signal_id=not.is.null",
+          "fta_signals?signal_id=not.is.null",
+          "fta_settings?id=not.is.null",
+          "fta_audit_logs?id=not.is.null",
+        ];
+
+        for (const table of tables) {
+          const res = await fetch(`${base}/rest/v1/${table}`, {
+            method: "DELETE",
+            headers: {
+              ...supabaseHeaders(config),
+              Prefer: "return=minimal",
+            },
+          });
+
+          if (!res.ok) {
+            throw new Error(`Lỗi xóa ${table.split("?")[0]} Supabase: ${res.status}`);
+          }
+        }
+      }
+
+      const newAudit = [
+        {
+          id: `${Date.now()}`,
+          at: Date.now(),
+          message: "Đã xóa toàn bộ dữ liệu cloud. Local trên máy này được giữ nguyên.",
+        },
+        ...auditLogs,
+      ].slice(0, 100);
+
+      setAuditLogs(newAudit);
+      persist(signals, forwardLogs, newAudit);
+      setCloudWipeMode("all");
+      setSyncStatus("Đã xóa toàn bộ cloud. Bấm Đồng bộ Supabase nếu muốn push local hiện tại lên cloud.");
+    } catch (err) {
+      setSyncStatus(err instanceof Error ? `Lỗi xóa toàn bộ cloud: ${err.message}` : "Lỗi xóa toàn bộ cloud");
+    }
+  }
 
   function rebuildLearning() {
     const stats = buildLearningStats(signals, forwardLogs);
@@ -2235,6 +2325,9 @@ export default function App() {
                 </button>
                 <button className="dangerBtn cloud" onClick={clearForwardLogsCloud}>
                   Xóa Forward Log cloud
+                </button>
+                <button className="dangerBtn cloud" onClick={clearAllCloudData}>
+                  Xóa toàn bộ cloud
                 </button>
                 <button className="secondary" onClick={clearLearningStats}>
                   Xóa Learning
