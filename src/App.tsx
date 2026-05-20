@@ -1550,42 +1550,42 @@ function learningAdjustmentForSignal(signal: Signal, stats: LearningStat[]) {
     const weight = isSpecific ? 1.45 : isCoreGroup ? 1.15 : 1;
 
     if (stat.bias === "GOOD") {
-      const boost = stat.sampleSize >= 20 && stat.winrate >= 40 && stat.avgR > 0 ? 4 : 2.5;
+      const boost = stat.sampleSize &gt;= 20 && stat.winrate >= 40 && stat.avgR > 0 ? 4 : 2.5;
       scoreAdjustment += boost * weight;
       notes.push(`Learning tốt: ${stat.label} có ${stat.sampleSize} mẫu, winrate ${stat.winrate}%, avg ${stat.avgR}R.`);
     }
 
     if (stat.bias === "WEAK") {
-      const penalty = stat.sampleSize >= 20 ? 9 : 5;
+      const penalty = stat.sampleSize &gt;= 20 ? 9 : 5;
       scoreAdjustment -= penalty * weight;
       notes.push(`Learning yếu: ${stat.label} có ${stat.sampleSize} mẫu, winrate ${stat.winrate}%, avg ${stat.avgR}R.`);
     }
 
-    if (stat.sampleSize >= 20 && stat.winrate < 20) {
+    if (stat.sampleSize &gt;= 20 && stat.winrate < 20) {
       scoreAdjustment -= 8 * weight;
       forceWait = true;
       notes.push(`Learning chặn bớt: ${stat.label} winrate dưới 20% trên ${stat.sampleSize} mẫu.`);
     }
 
-    if (stat.sampleSize >= 20 && stat.avgR < 0) {
+    if (stat.sampleSize &gt;= 20 && stat.avgR < 0) {
       scoreAdjustment -= 5 * weight;
       notes.push(`Learning âm R: ${stat.label} avgR ${stat.avgR}R, giảm ưu tiên tín hiệu.`);
     }
 
-    if (stat.sampleSize >= 20 && stat.tp2Rate === 0) {
+    if (stat.sampleSize &gt;= 20 && stat.tp2Rate === 0) {
       tp2MultiplierAdjustment -= 0.16 * weight;
       scoreAdjustment -= 4 * weight;
       notes.push(`Learning TP2: ${stat.label} chưa có TP2 trên ${stat.sampleSize} mẫu, kéo TP2 thực tế hơn.`);
     }
 
-    if (stat.sampleSize >= 20 && stat.slRate >= 25 && stat.entryHitRate >= 45) {
+    if (stat.sampleSize &gt;= 20 && stat.slRate >= 25 && stat.entryHitRate >= 45) {
       entryAtrAdjustment -= 0.08 * weight;
       slMultiplierAdjustment += 0.05 * weight;
       scoreAdjustment -= 5 * weight;
       notes.push(`Learning SL cao: ${stat.label} SL ${stat.slRate}%, chờ entry sâu hơn và giảm điểm.`);
     }
 
-    if (stat.sampleSize >= 20 && stat.winrate < 10 && stat.avgR < 0) {
+    if (stat.sampleSize &gt;= 20 && stat.winrate < 10 && stat.avgR < 0) {
       forceNoTrade = true;
       scoreAdjustment -= 10 * weight;
       notes.push(`Learning tránh trade: ${stat.label} winrate rất thấp và avgR âm.`);
@@ -2599,7 +2599,7 @@ Tiếp tục đồng bộ?`);
                   <li>Đồng bộ lại Supabase.</li>
                 </ol>
                 <h3>Nguyên tắc quan trọng</h3>
-                <p>Forward Test chỉ tính khớp lệnh khi giá chạm Entry tốt nhất. Learning Engine chỉ điều chỉnh rõ khi có tối thiểu 5 mẫu để tránh overfit. Nếu sampleSize >= 20 nhưng winrate thấp, avgR âm, TP2 = 0% hoặc SL cao thì tool sẽ giảm điểm mạnh, kéo TP2 thực tế hơn và có thể chuyển tín hiệu từ Có thể vào lệnh sang Chờ hoặc NO_TRADE.</p>
+                <p>Forward Test chỉ tính khớp lệnh khi giá chạm Entry tốt nhất. Learning Engine chỉ điều chỉnh rõ khi có tối thiểu 5 mẫu để tránh overfit. Nếu sampleSize &gt;= 20 nhưng winrate thấp, avgR âm, TP2 = 0% hoặc SL cao thì tool sẽ giảm điểm mạnh, kéo TP2 thực tế hơn và có thể chuyển tín hiệu từ Có thể vào lệnh sang Chờ hoặc NO_TRADE.</p>
               </div>
             </Panel>
           )}
