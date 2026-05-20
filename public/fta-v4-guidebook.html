@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Guidebook - Trợ lý Giao dịch Futures v4</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #dbe4ef;
+      --blue: #0ea5e9;
+      --green: #10b981;
+      --red: #ef4444;
+      --yellow: #f59e0b;
+      --shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, Arial, sans-serif;
+      background: linear-gradient(180deg, #eef6ff 0%, var(--bg) 280px);
+      color: var(--text);
+      line-height: 1.65;
+    }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 22px; }
+    header {
+      padding: 38px 0 22px;
+    }
+    .eyebrow {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: rgba(255,255,255,.75);
+      color: #0369a1;
+      font-weight: 800;
+      font-size: 13px;
+    }
+    h1 {
+      margin: 16px 0 10px;
+      font-size: clamp(30px, 5vw, 54px);
+      line-height: 1.05;
+      letter-spacing: -0.045em;
+    }
+    .lead {
+      max-width: 840px;
+      color: var(--muted);
+      font-size: 18px;
+    }
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 10px;
+      margin: 10px 0 20px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.86);
+      backdrop-filter: blur(14px);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+    nav a {
+      white-space: nowrap;
+      text-decoration: none;
+      color: var(--text);
+      padding: 9px 12px;
+      border-radius: 12px;
+      font-weight: 800;
+      font-size: 14px;
+    }
+    nav a:hover { background: #e0f2fe; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 22px;
+      margin: 16px 0;
+      box-shadow: var(--shadow);
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 26px;
+      letter-spacing: -0.025em;
+    }
+    h3 { margin-top: 18px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 18px;
+      padding: 16px;
+    }
+    .tag {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 12px;
+      font-weight: 900;
+      border: 1px solid transparent;
+    }
+    .green { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
+    .red { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+    .yellow { background: #fef9c3; color: #854d0e; border-color: #fde68a; }
+    .blue { background: #dbeafe; color: #1e40af; border-color: #bfdbfe; }
+    .note {
+      border-left: 4px solid var(--blue);
+      background: #eff6ff;
+      border-radius: 14px;
+      padding: 12px 14px;
+      color: #1e3a8a;
+    }
+    .warning {
+      border-left: 4px solid var(--yellow);
+      background: #fffbeb;
+      border-radius: 14px;
+      padding: 12px 14px;
+      color: #713f12;
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    pre {
+      background: #020617;
+      color: #e2e8f0;
+      padding: 16px;
+      border-radius: 16px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      font-size: 14px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      padding: 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #f8fafc; }
+    tr:last-child td { border-bottom: 0; }
+    footer {
+      color: var(--muted);
+      padding: 28px 0 45px;
+      font-size: 14px;
+    }
+    @media (max-width: 800px) {
+      .wrap { padding: 12px; }
+      section { padding: 16px; border-radius: 18px; }
+      .grid { grid-template-columns: 1fr; }
+      nav { border-radius: 14px; }
+      h2 { font-size: 22px; }
+      .lead { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="eyebrow">Futures Trade Assistant v4 · Guidebook</div>
+      <h1>Trợ lý Giao dịch Futures v4</h1>
+      <p class="lead">
+        Tài liệu hướng dẫn tổng quan, cách sử dụng, cách đọc tín hiệu, cách Forward Test hoạt động,
+        và cách đồng bộ dữ liệu cloud cho tool hỗ trợ trade futures thủ công.
+      </p>
+    </header>
+
+    <nav>
+      <a href="#overview">Tổng quan</a>
+      <a href="#workflow">Quy trình dùng</a>
+      <a href="#sections">Chi tiết từng phần</a>
+      <a href="#signal">Đọc tín hiệu</a>
+      <a href="#forward">Forward Test</a>
+      <a href="#cloud">Cloud & Log</a>
+      <a href="#mobile">Mobile</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+
+    <section id="overview">
+      <h2>1. Tổng quan tool</h2>
+      <p>
+        Trợ lý Giao dịch Futures v4 là công cụ hỗ trợ ra quyết định cho giao dịch crypto futures thủ công.
+        Tool không phải bot tự động vào lệnh, không phải grid bot, và không tự đặt lệnh trên Binance.
+      </p>
+      <div class="grid">
+        <div class="card"><span class="tag blue">Mục tiêu</span><p>Quét nhiều symbol, lọc tín hiệu, gợi ý hướng Long/Short, entry, SL, TP, đòn bẩy và ký quỹ.</p></div>
+        <div class="card"><span class="tag green">Dữ liệu</span><p>Lấy nến từ Binance Futures thông qua Cloudflare Worker Proxy để giảm lỗi CORS/rate-limit.</p></div>
+        <div class="card"><span class="tag yellow">Lưu trữ</span><p>Lưu local trên trình duyệt và đồng bộ lên Supabase để dùng được giữa máy tính và điện thoại.</p></div>
+      </div>
+      <div class="warning">
+        Tool chỉ hỗ trợ phân tích. Quyết định vào lệnh, quản trị vốn và chịu rủi ro vẫn thuộc về người dùng.
+      </div>
+    </section>
+
+    <section id="workflow">
+      <h2>2. Quy trình sử dụng khuyến nghị</h2>
+      <ol>
+        <li>Mở tool trên máy tính hoặc điện thoại.</li>
+        <li>Bấm <b>Đồng bộ Supabase</b> trước nếu bạn vừa đổi thiết bị.</li>
+        <li>Kiểm tra vốn, chế độ rủi ro, số lệnh tối đa, khung tín hiệu và nguồn dữ liệu.</li>
+        <li>Bấm <b>Phân tích</b> để tạo tín hiệu mới.</li>
+        <li>Xem từng card tín hiệu, chỉ ưu tiên tín hiệu có trạng thái hợp lý.</li>
+        <li>Bấm <b>Chạy Forward Test 1m</b> để replay tín hiệu bằng nến 1 phút.</li>
+        <li>Bấm <b>Đồng bộ Supabase</b> sau khi có log mới.</li>
+      </ol>
+      <div class="note">
+        Khi dùng nhiều thiết bị: luôn “Đồng bộ trước khi dùng” và “Đồng bộ lại sau khi dùng”.
+      </div>
+    </section>
+
+    <section id="sections">
+      <h2>3. Chi tiết từng phần trong tool</h2>
+      <table>
+        <thead><tr><th>Phần</th><th>Ý nghĩa</th></tr></thead>
+        <tbody>
+          <tr><td>Dashboard</td><td>Hiển thị số tín hiệu có thể vào, tín hiệu đang chờ, tín hiệu rủi ro, số tín hiệu đã lưu và số forward log.</td></tr>
+          <tr><td>Vốn USDT</td><td>Số vốn dự kiến dùng để chia ký quỹ và tính rủi ro.</td></tr>
+          <tr><td>Chế độ rủi ro</td><td>SAFE / NORMAL / AGGRESSIVE ảnh hưởng đến risk USDT và đòn bẩy đề xuất.</td></tr>
+          <tr><td>Số lệnh tối đa</td><td>Dùng để chia vốn theo số lệnh có thể mở cùng lúc.</td></tr>
+          <tr><td>Khung tín hiệu</td><td>Khung nến dùng để đọc tín hiệu chính: 5m, 15m hoặc 1h.</td></tr>
+          <tr><td>Nguồn dữ liệu</td><td>WORKER_PROXY là lựa chọn khuyến nghị. MOCK chỉ dùng để test giao diện.</td></tr>
+          <tr><td>Filter</td><td>Tất cả, Vào lệnh OK, Chờ, Rủi ro. Tín hiệu đã TP/SL/BE/Expired không còn được tính là “Có thể vào lệnh”.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="signal">
+      <h2>4. Cách đọc một card tín hiệu</h2>
+      <div class="grid">
+        <div class="card"><span class="tag green">LONG / MUA</span><p>Tool ưu tiên hướng tăng. Entry tốt nhất phải được chart xác nhận lại trước khi vào.</p></div>
+        <div class="card"><span class="tag red">SHORT / BÁN</span><p>Tool ưu tiên hướng giảm. Cần chú ý BTC filter và trạng thái thị trường.</p></div>
+        <div class="card"><span class="tag yellow">Chờ</span><p>Chưa nên vào ngay. Chờ giá về entry tốt hơn hoặc chờ retest.</p></div>
+      </div>
+      <h3>Các giá quan trọng</h3>
+      <ul>
+        <li><b>Entry tốt nhất:</b> giá dùng để đánh giá lệnh đã vào hay chưa trong Forward Test.</li>
+        <li><b>Vùng Entry:</b> vùng tham khảo để quan sát, nhưng không còn dùng để xác nhận đã vào lệnh.</li>
+        <li><b>SL:</b> điểm vô hiệu setup.</li>
+        <li><b>TP1 / TP2:</b> mục tiêu chốt lời.</li>
+        <li><b>Ký quỹ:</b> được tính theo vốn, số lệnh tối đa, đòn bẩy và rule riêng từng symbol.</li>
+      </ul>
+    </section>
+
+    <section id="forward">
+      <h2>5. Forward Test hoạt động như thế nào?</h2>
+      <p>
+        Forward Test dùng nến 1 phút để kiểm tra tín hiệu từ thời điểm signalTime trở đi.
+        Logic mới chỉ xem là đã vào lệnh khi giá chạm <b>Entry tốt nhất</b>, không dùng Entry Zone.
+      </p>
+      <table>
+        <thead><tr><th>Trạng thái</th><th>Ý nghĩa</th></tr></thead>
+        <tbody>
+          <tr><td>Chưa khớp Entry tốt nhất</td><td>Giá chưa chạm đúng best entry.</td></tr>
+          <tr><td>Đã vào lệnh</td><td>Giá đã chạm best entry nhưng chưa TP/SL.</td></tr>
+          <tr><td>Đã chạm TP1</td><td>Tool xem như đã đạt TP1 và dời SL về hòa vốn.</td></tr>
+          <tr><td>Đã chạm TP2</td><td>Lệnh hoàn tất theo mục tiêu TP2.</td></tr>
+          <tr><td>Đã chạm SL</td><td>Lệnh thất bại, không còn được tính là tín hiệu có thể vào.</td></tr>
+          <tr><td>Tín hiệu hết hạn</td><td>Quá thời gian cho phép mà chưa khớp entry.</td></tr>
+        </tbody>
+      </table>
+      <div class="warning">
+        Nếu một tín hiệu đã TP/SL/BE/Expired, tool không nên tiếp tục hiển thị là “Có thể vào lệnh”.
+      </div>
+    </section>
+
+    <section id="cloud">
+      <h2>6. Cloud, Supabase và Forward Log</h2>
+      <p>
+        Tool lưu dữ liệu ở hai nơi: localStorage trên trình duyệt và Supabase cloud.
+        Nút <b>Đồng bộ Supabase</b> sẽ kéo dữ liệu cloud về trước, sau đó đẩy dữ liệu hiện tại lên.
+      </p>
+      <h3>Các nút xóa dữ liệu</h3>
+      <table>
+        <thead><tr><th>Nút</th><th>Tác dụng</th></tr></thead>
+        <tbody>
+          <tr><td>Xóa log local</td><td>Xóa forward log trên máy hiện tại, không xóa cloud.</td></tr>
+          <tr><td>Xóa Forward Log cloud</td><td>Xóa toàn bộ forward log trên Supabase và local, dùng khi muốn tạo bộ log mới sạch.</td></tr>
+          <tr><td>Xóa toàn bộ local</td><td>Xóa dữ liệu local trên trình duyệt, không xóa Supabase.</td></tr>
+        </tbody>
+      </table>
+      <div class="note">
+        Forward log hiện tại không trực tiếp tham gia công thức tạo tín hiệu trong bản hiện tại.
+        Nó ảnh hưởng đến trạng thái hiển thị, filter và dashboard. Ví dụ: tín hiệu đã SL/TP sẽ không còn được tính là “Có thể vào lệnh”.
+      </div>
+    </section>
+
+    <section id="mobile">
+      <h2>7. Giao diện mobile</h2>
+      <p>
+        Trên điện thoại, tool chuyển sang layout 1 cột, filter sticky phía trên và cụm nút thao tác sticky gần cuối màn hình.
+        Dark mode dùng nền xanh navy/xám xanh để dịu mắt hơn khi xem chart buổi tối.
+      </p>
+      <ul>
+        <li>Bấm tên symbol để mở nhanh trang Binance Futures của symbol đó.</li>
+        <li>Dùng filter “Vào lệnh OK” để chỉ xem tín hiệu còn có thể cân nhắc.</li>
+        <li>Luôn đồng bộ trước khi chuyển từ máy tính sang điện thoại.</li>
+      </ul>
+    </section>
+
+    <section id="faq">
+      <h2>8. Câu hỏi thường gặp</h2>
+      <h3>Forward log có ảnh hưởng đến tín hiệu không?</h3>
+      <p>
+        Trong bản hiện tại, forward log không làm thay đổi công thức tạo tín hiệu, score, entry, SL hoặc TP.
+        Nhưng nó ảnh hưởng đến cách tool hiển thị tín hiệu. Nếu đã SL/TP/BE/Expired, tín hiệu không còn nằm trong nhóm “Có thể vào lệnh”.
+      </p>
+      <h3>Khi nào cần xóa Forward Log cloud?</h3>
+      <p>
+        Khi bạn muốn test lại từ đầu, dữ liệu log bị nhiễu, hoặc vừa thay đổi logic Forward Test và không muốn log cũ ảnh hưởng đến màn hình hiển thị.
+      </p>
+      <h3>Có nên dùng MOCK không?</h3>
+      <p>Không dùng MOCK để trade thật. MOCK chỉ dùng để test UI khi API lỗi.</p>
+      <h3>Tại sao ký quỹ mỗi symbol khác nhau?</h3>
+      <p>
+        Vì mỗi symbol có rule riêng từ Binance Futures như min notional, lot size, market lot size. Tool phải tính theo từng symbol thay vì dùng một mức cố định.
+      </p>
+    </section>
+
+    <footer>
+      Phiên bản guidebook dành cho Futures Trade Assistant v4. Dùng cho mục đích hướng dẫn vận hành và kiểm tra logic tool.
+    </footer>
+  </div>
+</body>
+</html>
