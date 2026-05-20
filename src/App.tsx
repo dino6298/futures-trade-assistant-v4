@@ -1538,21 +1538,57 @@ function learningAdjustmentForSignal(signal: Signal, stats: LearningStat[]) {
   let entryAtrAdjustment = 0;
   let tp2MultiplierAdjustment = 0;
   let slMultiplierAdjustment = 0;
+  let forceWait = false;
+  let forceNoTrade = false;
   const notes: string[] = [];
 
   for (const stat of related) {
     if (stat.sampleSize < 5) continue;
 
-    const weight = stat.key.startsWith("symbol-side") || stat.key.startsWith("symbol-setup") ? 1.4 : 1;
+    const isSpecific = stat.key.startsWith("symbol-side") || stat.key.startsWith("symbol-setup");
+    const isCoreGroup = stat.key.startsWith("side") || stat.key.startsWith("setup") || stat.key.startsWith("regime");
+    const weight = isSpecific ? 1.45 : isCoreGroup ? 1.15 : 1;
 
     if (stat.bias === "GOOD") {
-      scoreAdjustment += 3 * weight;
+      const boost = stat.sampleSize >= 20 && stat.winrate >= 40 && stat.avgR > 0 ? 4 : 2.5;
+      scoreAdjustment += boost * weight;
       notes.push(`Learning tốt: ${stat.label} có ${stat.sampleSize} mẫu, winrate ${stat.winrate}%, avg ${stat.avgR}R.`);
     }
 
     if (stat.bias === "WEAK") {
-      scoreAdjustment -= 5 * weight;
+      const penalty = stat.sampleSize >= 20 ? 9 : 5;
+      scoreAdjustment -= penalty * weight;
       notes.push(`Learning yếu: ${stat.label} có ${stat.sampleSize} mẫu, winrate ${stat.winrate}%, avg ${stat.avgR}R.`);
+    }
+
+    if (stat.sampleSize >= 20 && stat.winrate < 20) {
+      scoreAdjustment -= 8 * weight;
+      forceWait = true;
+      notes.push(`Learning chặn bớt: ${stat.label} winrate dưới 20% trên ${stat.sampleSize} mẫu.`);
+    }
+
+    if (stat.sampleSize >= 20 && stat.avgR < 0) {
+      scoreAdjustment -= 5 * weight;
+      notes.push(`Learning âm R: ${stat.label} avgR ${stat.avgR}R, giảm ưu tiên tín hiệu.`);
+    }
+
+    if (stat.sampleSize >= 20 && stat.tp2Rate === 0) {
+      tp2MultiplierAdjustment -= 0.16 * weight;
+      scoreAdjustment -= 4 * weight;
+      notes.push(`Learning TP2: ${stat.label} chưa có TP2 trên ${stat.sampleSize} mẫu, kéo TP2 thực tế hơn.`);
+    }
+
+    if (stat.sampleSize >= 20 && stat.slRate >= 25 && stat.entryHitRate >= 45) {
+      entryAtrAdjustment -= 0.08 * weight;
+      slMultiplierAdjustment += 0.05 * weight;
+      scoreAdjustment -= 5 * weight;
+      notes.push(`Learning SL cao: ${stat.label} SL ${stat.slRate}%, chờ entry sâu hơn và giảm điểm.`);
+    }
+
+    if (stat.sampleSize >= 20 && stat.winrate < 10 && stat.avgR < 0) {
+      forceNoTrade = true;
+      scoreAdjustment -= 10 * weight;
+      notes.push(`Learning tránh trade: ${stat.label} winrate rất thấp và avgR âm.`);
     }
 
     if (stat.noEntryRate >= 55 && stat.avgR >= 0) {
@@ -1561,23 +1597,25 @@ function learningAdjustmentForSignal(signal: Signal, stats: LearningStat[]) {
     }
 
     if (stat.slRate >= 50 && stat.entryHitRate >= 55) {
-      entryAtrAdjustment -= 0.1 * weight;
-      slMultiplierAdjustment += 0.05 * weight;
+      entryAtrAdjustment -= 0.12 * weight;
+      slMultiplierAdjustment += 0.07 * weight;
       notes.push(`Learning entry/SL: ${stat.label} hay khớp rồi SL, chờ entry sâu hơn và nới SL nhẹ.`);
     }
 
     if (stat.tp1Rate >= 45 && stat.tp2Rate < 20) {
-      tp2MultiplierAdjustment -= 0.08 * weight;
+      tp2MultiplierAdjustment -= 0.1 * weight;
       notes.push(`Learning TP: ${stat.label} thường TP1 rồi yếu, TP2 nên thực tế hơn.`);
     }
   }
 
   return {
-    scoreAdjustment: Math.max(-15, Math.min(8, Math.round(scoreAdjustment))),
-    entryAtrAdjustment: Math.max(-0.22, Math.min(0.18, entryAtrAdjustment)),
-    tp2MultiplierAdjustment: Math.max(-0.25, Math.min(0.1, tp2MultiplierAdjustment)),
-    slMultiplierAdjustment: Math.max(0, Math.min(0.18, slMultiplierAdjustment)),
-    notes: Array.from(new Set(notes)).slice(0, 4),
+    scoreAdjustment: Math.max(-35, Math.min(10, Math.round(scoreAdjustment))),
+    entryAtrAdjustment: Math.max(-0.32, Math.min(0.2, entryAtrAdjustment)),
+    tp2MultiplierAdjustment: Math.max(-0.45, Math.min(0.08, tp2MultiplierAdjustment)),
+    slMultiplierAdjustment: Math.max(0, Math.min(0.25, slMultiplierAdjustment)),
+    forceWait,
+    forceNoTrade,
+    notes: Array.from(new Set(notes)).slice(0, 6),
   };
 }
 
@@ -1589,6 +1627,8 @@ function applyLearningToSignal(signal: Signal, stats: LearningStat[]) {
     learning.entryAtrAdjustment === 0 &&
     learning.tp2MultiplierAdjustment === 0 &&
     learning.slMultiplierAdjustment === 0 &&
+    !learning.forceWait &&
+    !learning.forceNoTrade &&
     learning.notes.length === 0
   ) {
     return signal;
@@ -1614,9 +1654,14 @@ function applyLearningToSignal(signal: Signal, stats: LearningStat[]) {
     score >= 85 ? "A+" : score >= 75 ? "A" : score >= 65 ? "B" : score >= 55 ? "C" : "NO_TRADE";
 
   let action = signal.action;
-  if (grade === "NO_TRADE") action = "NO_TRADE";
-  else if (learning.scoreAdjustment <= -8 && action === "ENTRY_OK") action = "WAIT_PULLBACK";
-  else if (learning.scoreAdjustment >= 5 && (action === "WAIT_PULLBACK" || action === "WAIT_RETEST")) action = "ENTRY_OK";
+
+  if (learning.forceNoTrade || grade === "NO_TRADE") {
+    action = "NO_TRADE";
+  } else if (learning.forceWait || (learning.scoreAdjustment <= -8 && action === "ENTRY_OK")) {
+    action = "WAIT_PULLBACK";
+  } else if (learning.scoreAdjustment >= 6 && !learning.forceWait && (action === "WAIT_PULLBACK" || action === "WAIT_RETEST")) {
+    action = "ENTRY_OK";
+  }
 
   return {
     ...signal,
@@ -1630,8 +1675,16 @@ function applyLearningToSignal(signal: Signal, stats: LearningStat[]) {
     tp1: newTp1,
     tp2: newTp2,
     rr: Math.round(rr * 100) / 100,
-    reasons: learning.scoreAdjustment > 0 ? [...signal.reasons, ...learning.notes] : signal.reasons,
-    warnings: learning.scoreAdjustment < 0 || learning.entryAtrAdjustment || learning.tp2MultiplierAdjustment || learning.slMultiplierAdjustment ? [...signal.warnings, ...learning.notes] : signal.warnings,
+    reasons: learning.scoreAdjustment > 0 && !learning.forceWait && !learning.forceNoTrade ? [...signal.reasons, ...learning.notes] : signal.reasons,
+    warnings:
+      learning.scoreAdjustment < 0 ||
+      learning.forceWait ||
+      learning.forceNoTrade ||
+      learning.entryAtrAdjustment ||
+      learning.tp2MultiplierAdjustment ||
+      learning.slMultiplierAdjustment
+        ? [...signal.warnings, ...learning.notes]
+        : signal.warnings,
   };
 }
 
@@ -1785,6 +1838,18 @@ export default function App() {
       const forwardFailures: string[] = [];
       const forwardTargets = getForwardTestTargets(signals, forwardLogs, config.forwardTestLimit);
 
+      if (!forwardTargets.length) {
+        if (config.forwardTestLimit === -1) {
+          throw new Error(
+            `Không có Forward Log chưa TP/SL để test. Forward log hiện tại: ${forwardLogs.length}. Nếu Forward log = 0, hãy chọn Forward Test: Tất cả signal history để tạo log mới trước.`
+          );
+        }
+
+        throw new Error(
+          `Không có tín hiệu nào để Forward Test. Tín hiệu đã lưu hiện tại: ${signals.length}. Hãy bấm Phân tích trước.`
+        );
+      }
+
       for (const signal of forwardTargets) {
         const result = await fetchCandlesSafe(config, signal.symbol, "1m", 1000);
 
@@ -1798,7 +1863,11 @@ export default function App() {
       }
 
       if (!logs.length) {
-        throw new Error(`Không chạy được Forward Test cho symbol nào. Lỗi đầu tiên: ${forwardFailures[0] || "không rõ"}`);
+        throw new Error(
+          forwardFailures.length
+            ? `Không chạy được Forward Test cho symbol nào. Lỗi đầu tiên: ${forwardFailures[0]}`
+            : `Không có kết quả Forward Test mới. Có thể không có target hợp lệ hoặc dữ liệu nến chưa sẵn sàng.`
+        );
       }
 
       const nextLogs = mergeForwardLogsKeepLatest(forwardLogs, logs);
@@ -2232,7 +2301,7 @@ Tiếp tục đồng bộ?`);
               <option value={10}>Top 10</option>
               <option value={20}>Top 20</option>
               <option value={0}>Tất cả signal history</option>
-              <option value={-1}>Tất cả log chưa TP/SL</option>
+              <option value={-1}>Log chưa TP/SL</option>
             </select>
           </label>
         </div>
@@ -2297,7 +2366,7 @@ Tiếp tục đồng bộ?`);
           ) : (
             <>
               Đang quét <b>{getScanSymbols(config).length}</b> symbol · Forward Test:{" "}
-              <b>{config.forwardTestLimit === -1 ? "tất cả log chưa TP/SL" : config.forwardTestLimit === 0 ? "tất cả signal history" : `top ${config.forwardTestLimit}`}</b>
+              <b>{config.forwardTestLimit === -1 ? "log chưa TP/SL" : config.forwardTestLimit === 0 ? "tất cả signal history" : `top ${config.forwardTestLimit}`}</b>
             </>
           )}
         </div>
@@ -2492,7 +2561,7 @@ Tiếp tục đồng bộ?`);
                 <p className="muted">Theo dõi các nhóm symbol/setup/regime đang mạnh hay yếu để tool học dần từ Forward Log.</p>
               </div>
             </div>
-            {learningStats.length === 0 && <div className="muted">Chưa có Learning Stats. Hãy chạy Forward Test 1m cho tất cả signal history rồi bấm Rebuild Learning. Log cũ không có signalSnapshot có thể không học đủ nếu signal gốc đã bị xóa.</div>}
+            {learningStats.length === 0 && <div className="muted">Chưa có Learning Stats. Hãy chạy Forward Test 1m cho tất cả signal history rồi bấm Rebuild Learning. Log cũ không có signalSnapshot có thể không học đủ nếu signal gốc đã bị xóa. Nếu đã xóa Forward Log, cần chạy Tất cả signal history để tạo log mới.</div>}
             {learningStats.length > 0 && (
               <div className="learningGrid compact">
                 {learningStats.slice(0, 6).map((stat) => (
@@ -2530,7 +2599,7 @@ Tiếp tục đồng bộ?`);
                   <li>Đồng bộ lại Supabase.</li>
                 </ol>
                 <h3>Nguyên tắc quan trọng</h3>
-                <p>Forward Test chỉ tính khớp lệnh khi giá chạm Entry tốt nhất. Learning Engine chỉ điều chỉnh rõ khi có tối thiểu 5 mẫu để tránh overfit.</p>
+                <p>Forward Test chỉ tính khớp lệnh khi giá chạm Entry tốt nhất. Learning Engine chỉ điều chỉnh rõ khi có tối thiểu 5 mẫu để tránh overfit. Nếu sampleSize >= 20 nhưng winrate thấp, avgR âm, TP2 = 0% hoặc SL cao thì tool sẽ giảm điểm mạnh, kéo TP2 thực tế hơn và có thể chuyển tín hiệu từ Có thể vào lệnh sang Chờ hoặc NO_TRADE.</p>
               </div>
             </Panel>
           )}

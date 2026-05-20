@@ -1008,3 +1008,473 @@ body:has(.app.dark) {
   color: var(--muted);
   font-size: 12px;
 }
+
+
+
+/* ===== Mobile UX Upgrade v4 ===== */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+button,
+input,
+select {
+  min-height: 44px;
+}
+
+@media (max-width: 900px) {
+  body {
+    overflow-x: hidden;
+  }
+
+  .app {
+    width: 100%;
+    max-width: 100vw;
+    padding: 10px;
+    overflow-x: hidden;
+  }
+
+  .top {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 10px 8px;
+    margin: -10px -10px 10px;
+    background: rgba(10, 16, 32, 0.96);
+    border-bottom: 1px solid var(--border-soft);
+    backdrop-filter: blur(10px);
+  }
+
+  .top h1 {
+    font-size: 22px;
+    line-height: 1.12;
+    letter-spacing: 0.2px;
+    margin: 0;
+  }
+
+  .top p,
+  .heroBlock p {
+    font-size: 12px;
+    line-height: 1.35;
+    margin: 4px 0 0;
+  }
+
+  .topBadges,
+  .headerActions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .topBadges > *,
+  .headerActions > * {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .metrics .panel {
+    min-height: 72px;
+    padding: 12px;
+    border-radius: 16px;
+  }
+
+  .metrics .panel b {
+    font-size: 22px;
+  }
+
+  .controlPanel {
+    padding: 12px;
+    border-radius: 18px;
+  }
+
+  .sectionHeader {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .sectionHeader h2 {
+    font-size: 20px;
+    margin-bottom: 4px;
+  }
+
+  .configGrid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px;
+  }
+
+  .configGrid label,
+  .fullLabel,
+  .autoUniverseGrid label {
+    min-width: 0;
+    font-size: 12px;
+  }
+
+  .configGrid input,
+  .configGrid select,
+  .fullLabel input,
+  .autoUniverseGrid input,
+  .autoUniverseGrid select {
+    width: 100%;
+    min-width: 0;
+    font-size: 14px;
+    padding: 10px 12px;
+    border-radius: 12px;
+  }
+
+  .autoUniverseGrid {
+    grid-template-columns: 1fr !important;
+    gap: 10px;
+  }
+
+  .scanSummary {
+    font-size: 12px;
+    line-height: 1.45;
+    padding: 10px;
+    border-radius: 14px;
+  }
+
+  .primaryActions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .primaryActions button {
+    width: 100%;
+    padding: 10px 8px;
+    border-radius: 14px;
+    font-size: 13px;
+    white-space: normal;
+  }
+
+  .utilityPanel {
+    padding-top: 12px;
+    margin-top: 12px;
+  }
+
+  .utilityGroup {
+    padding: 10px;
+    border-radius: 14px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+    margin-bottom: 10px;
+  }
+
+  .utilityButtons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .utilityButtons button {
+    width: 100%;
+    white-space: normal;
+    font-size: 12px;
+    padding: 9px 8px;
+  }
+
+  .filters {
+    position: sticky;
+    top: 92px;
+    z-index: 25;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    padding: 8px;
+    margin: 10px -2px;
+    background: rgba(10, 16, 32, 0.95);
+    border: 1px solid var(--border-soft);
+    border-radius: 16px;
+    backdrop-filter: blur(10px);
+  }
+
+  .filters button {
+    min-height: 38px;
+    padding: 8px 4px;
+    font-size: 12px;
+    border-radius: 12px;
+  }
+
+  .mainLayout {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .mainColumn,
+  .sideColumn {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .signals {
+    display: grid;
+    grid-template-columns: 1fr !important;
+    gap: 12px;
+  }
+
+  .signal {
+    width: 100%;
+    min-width: 0;
+    padding: 14px;
+    border-radius: 18px;
+  }
+
+  .signalHead {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .signal h2,
+  .symbolLink {
+    font-size: 24px;
+    line-height: 1.05;
+    word-break: break-word;
+  }
+
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .badge {
+    font-size: 11px;
+    padding: 6px 9px;
+    border-radius: 999px;
+  }
+
+  .priceGrid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .priceGrid > div {
+    min-width: 0;
+    padding: 10px;
+    border-radius: 14px;
+  }
+
+  .priceGrid span {
+    font-size: 11px;
+  }
+
+  .priceGrid b {
+    font-size: 15px;
+    word-break: break-word;
+  }
+
+  .miniGrid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .miniGrid > div {
+    min-width: 0;
+    padding: 9px 8px;
+    font-size: 12px;
+    border-radius: 12px;
+  }
+
+  .notes p,
+  .log,
+  .audit,
+  .guidebook,
+  .learningCard {
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .log {
+    max-height: 150px;
+    overflow: auto;
+    padding: 10px;
+    border-radius: 14px;
+  }
+
+  .sideColumn {
+    order: 2;
+  }
+
+  .sideColumn .panel {
+    padding: 14px;
+    border-radius: 18px;
+  }
+
+  .learningGrid,
+  .learningGrid.compact {
+    display: grid;
+    grid-template-columns: 1fr !important;
+    gap: 10px;
+  }
+
+  .learningCard {
+    padding: 12px;
+    border-radius: 16px;
+  }
+
+  .learningTop {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .learningTop b {
+    font-size: 15px;
+  }
+
+  .learningStats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .learningStats span {
+    min-width: 0;
+    padding: 7px 6px;
+    font-size: 11px;
+    border-radius: 10px;
+  }
+
+  .journal {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .journal input,
+  .journal button {
+    width: 100%;
+  }
+
+  .utilityDocs pre,
+  pre {
+    max-width: 100%;
+    overflow: auto;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre;
+  }
+}
+
+@media (max-width: 520px) {
+  .app {
+    padding: 8px;
+  }
+
+  .top {
+    margin: -8px -8px 8px;
+  }
+
+  .top h1 {
+    font-size: 20px;
+  }
+
+  .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metrics .panel {
+    min-height: 64px;
+    padding: 10px;
+  }
+
+  .metrics .panel:nth-child(5) {
+    grid-column: span 2;
+  }
+
+  .configGrid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  .configGrid label:nth-child(5),
+  .configGrid label:nth-child(6),
+  .configGrid label:nth-child(7) {
+    grid-column: span 2;
+  }
+
+  .primaryActions {
+    grid-template-columns: 1fr;
+  }
+
+  .utilityButtons {
+    grid-template-columns: 1fr;
+  }
+
+  .filters {
+    top: 86px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px;
+    padding: 6px;
+  }
+
+  .filters button {
+    font-size: 11px;
+    min-height: 36px;
+  }
+
+  .priceGrid,
+  .miniGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .learningStats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .signal {
+    padding: 12px;
+  }
+
+  .signal h2,
+  .symbolLink {
+    font-size: 22px;
+  }
+}
+
+@media (max-width: 380px) {
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .metrics .panel:nth-child(5) {
+    grid-column: span 1;
+  }
+
+  .configGrid,
+  .priceGrid,
+  .miniGrid,
+  .learningStats {
+    grid-template-columns: 1fr !important;
+  }
+
+  .filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
