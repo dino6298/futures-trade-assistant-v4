@@ -68,6 +68,7 @@ type AppConfig = {
   autoUniverseLimit: number;
   autoMinQuoteVolume: number;
   autoMaxAbsChangePct: number;
+  maxConcurrentRequests: number;
 };
 
 type SymbolRule = {
@@ -113,13 +114,30 @@ type ForwardLog = {
   testedAt?: number;
   forwardRunId?: string;
   signalSnapshot?: Signal;
+  quality?: LogQuality;
+  qualityReason?: string;
   entryHit?: boolean;
   entryHitMinutes?: number;
   maxFavorableR?: number;
   maxAdverseR?: number;
 };
 
+type LogQuality = "HIGH" | "MEDIUM" | "LOW" | "INVALID";
+
 type LearningBias = "GOOD" | "NEUTRAL" | "WEAK";
+
+type LearningEngineStatus = {
+  totalLogs: number;
+  usableLogs: number;
+  invalidLogs: number;
+  highQualityLogs: number;
+  mediumQualityLogs: number;
+  lowQualityLogs: number;
+  groups: number;
+  groupsReady: number;
+  learningActive: boolean;
+  lastRebuildText: string;
+};
 
 type LearningStat = {
   key: string;
@@ -258,6 +276,7 @@ const DEFAULT_CONFIG: AppConfig = {
   autoUniverseLimit: 30,
   autoMinQuoteVolume: 50000000,
   autoMaxAbsChangePct: 18,
+  maxConcurrentRequests: 4,
 };
 
 const SCHEMA_SQL = `
@@ -682,7 +701,9 @@ function parseTradableFuturesSymbols(raw: any) {
 
   return raw.symbols
     .filter((item: any) => {
-      return (
+      const learningStatus = learningEngineStatus(signals, forwardLogs, learningStats);
+
+  return (
         item &&
         item.symbol &&
         item.contractType === "PERPETUAL" &&
@@ -1402,12 +1423,14 @@ function mergeForwardLogsKeepLatest(localLogs: ForwardLog[], remoteLogs: Forward
 }
 
 function ensureForwardLogMeta(log: ForwardLog, signal: Signal, forwardRunId: string, testedAt: number) {
-  return {
+  const enriched = {
     ...log,
     signalSnapshot: log.signalSnapshot || signal,
     forwardRunId: log.forwardRunId || forwardRunId,
     testedAt: log.testedAt || testedAt,
   };
+
+  return attachLogQuality(enriched, signal);
 }
 
 function mergeSignalsLocalWins(localSignals: Signal[], remoteSignals: Signal[]) {
@@ -1464,6 +1487,103 @@ function commonFailure(logs: ForwardLog[]) {
   return Array.from(map.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
 }
 
+
+function mapWithConcurrency<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>) {
+  const results: R[] = [];
+  let index = 0;
+
+  async function worker() {
+    while (index < items.length) {
+      const currentIndex = index;
+      index += 1;
+      results[currentIndex] = await task(items[currentIndex]);
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(limit || DEFAULT_CONFIG.maxConcurrentRequests, items.length || 1));
+  return Promise.all(Array.from({ length: workerCount }, worker)).then(() => results);
+}
+
+function classifyForwardLogQuality(log: ForwardLog, signal?: Signal): { quality: LogQuality; qualityReason: string } {
+  const sourceSignal = signal || log.signalSnapshot;
+
+  if (!sourceSignal) {
+    return { quality: "INVALID", qualityReason: "Thiếu signalSnapshot và không tìm được signal gốc." };
+  }
+
+  if (!Number.isFinite(sourceSignal.bestEntry) || !Number.isFinite(sourceSignal.sl) || !Number.isFinite(sourceSignal.tp1) || !Number.isFinite(sourceSignal.tp2)) {
+    return { quality: "INVALID", qualityReason: "Thiếu entry/sl/tp hợp lệ." };
+  }
+
+  if (!log.status || log.status === "WAITING_ENTRY") {
+    return { quality: "LOW", qualityReason: "Log chưa có kết quả đủ rõ để học mạnh." };
+  }
+
+  if (log.failureReason && log.failureReason.includes("API")) {
+    return { quality: "INVALID", qualityReason: "Log lỗi API." };
+  }
+
+  if (log.signalSnapshot && log.testedAt && log.forwardRunId) {
+    return { quality: "HIGH", qualityReason: "Có signalSnapshot, testedAt và forwardRunId." };
+  }
+
+  if (sourceSignal && log.testedAt) {
+    return { quality: "MEDIUM", qualityReason: "Có signal gốc và testedAt nhưng thiếu snapshot đầy đủ." };
+  }
+
+  return { quality: "LOW", qualityReason: "Log cũ hoặc thiếu metadata." };
+}
+
+function isLearningUsableLog(log: ForwardLog, signal?: Signal) {
+  const quality = classifyForwardLogQuality(log, signal).quality;
+  return quality === "HIGH" || quality === "MEDIUM";
+}
+
+function learningEngineStatus(signals: Signal[], logs: ForwardLog[], stats: LearningStat[]): LearningEngineStatus {
+  const signalMap = new Map(signals.map((signal) => [signal.id, signal]));
+  let highQualityLogs = 0;
+  let mediumQualityLogs = 0;
+  let lowQualityLogs = 0;
+  let invalidLogs = 0;
+
+  for (const log of logs) {
+    const signal = signalMap.get(log.signalId) || log.signalSnapshot;
+    const quality = log.quality || classifyForwardLogQuality(log, signal).quality;
+
+    if (quality === "HIGH") highQualityLogs += 1;
+    else if (quality === "MEDIUM") mediumQualityLogs += 1;
+    else if (quality === "LOW") lowQualityLogs += 1;
+    else invalidLogs += 1;
+  }
+
+  const usableLogs = highQualityLogs + mediumQualityLogs;
+  const groupsReady = stats.filter((stat) => stat.sampleSize >= 5).length;
+  const lastTestedAt = logs.reduce((max, log) => Math.max(max, log.testedAt || 0), 0);
+
+  return {
+    totalLogs: logs.length,
+    usableLogs,
+    invalidLogs,
+    highQualityLogs,
+    mediumQualityLogs,
+    lowQualityLogs,
+    groups: stats.length,
+    groupsReady,
+    learningActive: usableLogs > 0 && groupsReady > 0,
+    lastRebuildText: lastTestedAt ? time(lastTestedAt) : "Chưa có",
+  };
+}
+
+function attachLogQuality(log: ForwardLog, signal: Signal) {
+  const quality = classifyForwardLogQuality(log, signal);
+
+  return {
+    ...log,
+    quality: quality.quality,
+    qualityReason: quality.qualityReason,
+  };
+}
+
 function buildLearningStats(signals: Signal[], logs: ForwardLog[]) {
   const signalMap = new Map(signals.map((signal) => [signal.id, signal]));
   const groups = new Map<string, { label: string; logs: ForwardLog[] }>();
@@ -1476,6 +1596,7 @@ function buildLearningStats(signals: Signal[], logs: ForwardLog[]) {
   for (const log of logs) {
     const signal = signalMap.get(log.signalId) || log.signalSnapshot;
     if (!signal) continue;
+    if (!isLearningUsableLog(log, signal)) continue;
     if (log.status === "WAITING_ENTRY") continue;
 
     addGroup(`symbol:${signal.symbol}`, `Symbol · ${signal.symbol}`, log);
@@ -1735,6 +1856,7 @@ export default function App() {
         autoUniverseLimit: saved.config.autoUniverseLimit ?? DEFAULT_CONFIG.autoUniverseLimit,
         autoMinQuoteVolume: saved.config.autoMinQuoteVolume ?? DEFAULT_CONFIG.autoMinQuoteVolume,
         autoMaxAbsChangePct: saved.config.autoMaxAbsChangePct ?? DEFAULT_CONFIG.autoMaxAbsChangePct,
+        maxConcurrentRequests: saved.config.maxConcurrentRequests ?? DEFAULT_CONFIG.maxConcurrentRequests,
       });
     }
 
@@ -1846,19 +1968,35 @@ export default function App() {
         }
 
         throw new Error(
-          `Không có tín hiệu nào để Forward Test. Tín hiệu đã lưu hiện tại: ${signals.length}. Hãy bấm Phân tích trước.`
+          `Không có tín hiệu nào để Forward Test. Tín hiệu đang hiển thị hiện tại: ${signals.length}. Hãy bấm Phân tích trước.`
         );
       }
 
-      for (const signal of forwardTargets) {
-        const result = await fetchCandlesSafe(config, signal.symbol, "1m", 1000);
+      const symbolsToFetch = uniqueList(forwardTargets.map((signal) => signal.symbol));
+      const candleCache = new Map<string, Candle[]>();
+      const candleErrors = new Map<string, string>();
 
-        if (!result.candles.length) {
-          forwardFailures.push(`${signal.symbol}: ${result.error}`);
+      setApiStatus(`Đang tải nến 1m cho ${symbolsToFetch.length} symbol...`);
+
+      await mapWithConcurrency(symbolsToFetch, config.maxConcurrentRequests, async (symbol) => {
+        const result = await fetchCandlesSafe(config, symbol, "1m", 1000);
+
+        if (result.candles.length) {
+          candleCache.set(symbol, result.candles);
+        } else {
+          candleErrors.set(symbol, result.error || "Không có dữ liệu nến");
+        }
+      });
+
+      for (const signal of forwardTargets) {
+        const candles = candleCache.get(signal.symbol);
+
+        if (!candles?.length) {
+          forwardFailures.push(`${signal.symbol}: ${candleErrors.get(signal.symbol) || "Không có dữ liệu nến"}`);
           continue;
         }
 
-        const log = executeRealForwardTest1m(signal, result.candles);
+        const log = executeRealForwardTest1m(signal, candles);
         logs.push(ensureForwardLogMeta(log, signal, forwardRunId, testedAt));
       }
 
@@ -1875,7 +2013,7 @@ export default function App() {
         {
           id: `${Date.now()}`,
           at: Date.now(),
-          message: `Đã chạy Forward Test thật bằng nến 1m cho ${logs.length}/${forwardTargets.length} tín hiệu ${config.forwardTestLimit === -1 ? "từ log chưa TP/SL" : config.forwardTestLimit === 0 ? "đã lưu" : "được chọn"}${forwardFailures.length ? `. Bỏ qua ${forwardFailures.length} symbol lỗi.` : ""}`,
+          message: `Đã chạy Forward Test v4.1 bằng nến 1m cho ${logs.length}/${forwardTargets.length} tín hiệu ${config.forwardTestLimit === -1 ? "từ log chưa TP/SL" : config.forwardTestLimit === 0 ? "đã lưu" : "được chọn"}. Cache ${symbolsToFetch.length} symbol, concurrency ${config.maxConcurrentRequests}.${forwardFailures.length ? ` Bỏ qua ${forwardFailures.length} tín hiệu lỗi.` : ""}`,
         },
         ...auditLogs,
       ].slice(0, 100);
@@ -2149,7 +2287,9 @@ Tiếp tục đồng bộ?`);
     setApiStatus("Chưa phân tích");
   }
 
-  const filtered = signals.filter((s) => {
+  const uniqueSignals = keepLatestSignalPerSymbol(signals);
+
+  const filtered = uniqueSignals.filter((s) => {
     const log = forwardLogs.find((l) => l.signalId === s.id);
 
     if (filter === "ENTRY") {
@@ -2167,19 +2307,19 @@ Tiếp tục đồng bộ?`);
     return true;
   });
 
-  const tradeable = signals.filter((s) => {
+  const tradeable = uniqueSignals.filter((s) => {
     const log = forwardLogs.find((l) => l.signalId === s.id);
     return s.action === "ENTRY_OK" && (!log || !isTerminalForwardStatus(log.status));
   }).length;
 
-  const waiting = signals.filter((s) => {
+  const waiting = uniqueSignals.filter((s) => {
     const log = forwardLogs.find((l) => l.signalId === s.id);
     return (s.action === "WAIT_PULLBACK" || s.action === "WAIT_RETEST") && (!log || !isTerminalForwardStatus(log.status));
   }).length;
 
-  const risky = signals.filter((s) => {
+  const risky = uniqueSignals.filter((s) => {
     const log = forwardLogs.find((l) => l.signalId === s.id);
-    return ["HIGH_RISK", "BAD_RR", "AVOID"].includes(s.action) || Boolean(log && isTerminalForwardStatus(log.status));
+    return ["HIGH_RISK", "BAD_RR", "AVOID", "NO_TRADE"].includes(s.action) || Boolean(log && isTerminalForwardStatus(log.status));
   }).length;
 
   
@@ -2214,8 +2354,8 @@ Tiếp tục đồng bộ?`);
           <b>{risky}</b>
         </Panel>
         <Panel>
-          <div className="muted">Tín hiệu đã lưu</div>
-          <b>{signals.length}</b>
+          <div className="muted">Tín hiệu đang hiển thị</div>
+          <b>{uniqueSignals.length}</b>
         </Panel>
         <Panel>
           <div className="muted">Forward log</div>
@@ -2302,6 +2442,18 @@ Tiếp tục đồng bộ?`);
               <option value={20}>Top 20</option>
               <option value={0}>Tất cả signal history</option>
               <option value={-1}>Log chưa TP/SL</option>
+            </select>
+          </label>
+          <label>
+            Max API song song
+            <select
+              value={config.maxConcurrentRequests}
+              onChange={(e) => setConfig({ ...config, maxConcurrentRequests: Number(e.target.value) })}
+            >
+              <option value={2}>2</option>
+              <option value={3}>3</option>
+              <option value={4}>4</option>
+              <option value={5}>5</option>
             </select>
           </label>
         </div>
@@ -2561,6 +2713,17 @@ Tiếp tục đồng bộ?`);
                 <p className="muted">Theo dõi các nhóm symbol/setup/regime đang mạnh hay yếu để tool học dần từ Forward Log.</p>
               </div>
             </div>
+            <div className="learningStatusGrid">
+              <div><span>Total logs</span><b>{learningStatus.totalLogs}</b></div>
+              <div><span>Usable</span><b>{learningStatus.usableLogs}</b></div>
+              <div><span>Invalid</span><b>{learningStatus.invalidLogs}</b></div>
+              <div><span>HIGH</span><b>{learningStatus.highQualityLogs}</b></div>
+              <div><span>MEDIUM</span><b>{learningStatus.mediumQualityLogs}</b></div>
+              <div><span>Groups đủ mẫu</span><b>{learningStatus.groupsReady}</b></div>
+            </div>
+            <div className={learningStatus.learningActive ? "learningActiveBanner active" : "learningActiveBanner"}>
+              Learning Engine: {learningStatus.learningActive ? "Đang hoạt động" : "Đang thu thập dữ liệu"} · Last test: {learningStatus.lastRebuildText}
+            </div>
             {learningStats.length === 0 && <div className="muted">Chưa có Learning Stats. Hãy chạy Forward Test 1m cho tất cả signal history rồi bấm Rebuild Learning. Log cũ không có signalSnapshot có thể không học đủ nếu signal gốc đã bị xóa. Nếu đã xóa Forward Log, cần chạy Tất cả signal history để tạo log mới.</div>}
             {learningStats.length > 0 && (
               <div className="learningGrid compact">
@@ -2599,7 +2762,7 @@ Tiếp tục đồng bộ?`);
                   <li>Đồng bộ lại Supabase.</li>
                 </ol>
                 <h3>Nguyên tắc quan trọng</h3>
-                <p>{`Forward Test chỉ tính khớp lệnh khi giá chạm Entry tốt nhất. Learning Engine chỉ điều chỉnh rõ khi có tối thiểu 5 mẫu để tránh overfit. Nếu sampleSize >= 20 nhưng winrate thấp, avgR âm, TP2 = 0% hoặc SL cao thì tool sẽ giảm điểm mạnh, kéo TP2 thực tế hơn và có thể chuyển tín hiệu từ Có thể vào lệnh sang Chờ hoặc NO_TRADE.`}</p>
+                <p>{`Forward Test v4.1 có cache nến theo symbol và giới hạn API song song. Learning Engine chỉ học mạnh từ log HIGH/MEDIUM để tránh nhiễu. Nếu sampleSize >= 20 nhưng winrate thấp, avgR âm, TP2 = 0% hoặc SL cao thì tool sẽ giảm điểm mạnh, kéo TP2 thực tế hơn và có thể chuyển tín hiệu từ Có thể vào lệnh sang Chờ hoặc NO_TRADE.`}</p>
               </div>
             </Panel>
           )}
