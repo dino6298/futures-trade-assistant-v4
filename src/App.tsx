@@ -1281,6 +1281,7 @@ export default function App() {
   const [showWorker, setShowWorker] = useState(false);
   const [journalNote, setJournalNote] = useState("");
   const [showGuidebook, setShowGuidebook] = useState(false);
+  const [showUtilities, setShowUtilities] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
   useEffect(() => {
@@ -1608,10 +1609,11 @@ export default function App() {
     return ["HIGH_RISK", "BAD_RR", "AVOID"].includes(s.action) || Boolean(log && isTerminalForwardStatus(log.status));
   }).length;
 
+  
   return (
     <div className={darkMode ? "app dark" : "app"}>
       <header className="top">
-        <div>
+        <div className="heroBlock">
           <h1>Trợ lý Giao dịch Futures v4</h1>
           <p>Hỗ trợ quyết định trade futures thủ công · Không grid bot · Dữ liệu qua Worker Proxy · Đồng bộ Supabase</p>
         </div>
@@ -1648,7 +1650,22 @@ export default function App() {
         </Panel>
       </section>
 
-      <Panel>
+      <Panel className="controlPanel">
+        <div className="sectionHeader">
+          <div>
+            <h2>Cấu hình & thao tác</h2>
+            <p className="muted">Giữ các thao tác thường dùng ở khu vực chính. Tiện ích ít dùng được gom vào phần mở rộng để giao diện gọn hơn.</p>
+          </div>
+          <div className="headerActions">
+            <button className="secondary smallBtn" onClick={() => setShowGuidebook(!showGuidebook)}>
+              {showGuidebook ? "Ẩn Guidebook" : "Mở Guidebook"}
+            </button>
+            <button className="secondary smallBtn" onClick={() => setShowUtilities(!showUtilities)}>
+              {showUtilities ? "Ẩn tiện ích" : "Tiện ích & dữ liệu"}
+            </button>
+          </div>
+        </div>
+
         <div className="configGrid">
           <label>
             Vốn USDT
@@ -1696,7 +1713,7 @@ export default function App() {
           <input value={config.workerProxyUrl} onChange={(e) => setConfig({ ...config, workerProxyUrl: e.target.value })} />
         </label>
 
-        <div className="actions">
+        <div className="primaryActions">
           <button onClick={analyze}>Phân tích</button>
           <button className="secondary" onClick={runForwardTest}>
             Chạy Forward Test 1m
@@ -1704,25 +1721,61 @@ export default function App() {
           <button className="secondary" onClick={syncCloud}>
             Đồng bộ Supabase
           </button>
-          <button className="dangerBtn" onClick={clearLogs}>
-            Xóa log local
-          </button>
-          <button className="dangerBtn cloud" onClick={clearForwardLogsCloud}>
-            Xóa Forward Log cloud
-          </button>
           <button className="secondary" onClick={rebuildLearning}>
             Rebuild Learning
           </button>
-          <button className="secondary" onClick={clearLearningStats}>
-            Xóa Learning
-          </button>
-          <button className="secondary" onClick={() => setShowGuidebook(!showGuidebook)}>
-            Guidebook
-          </button>
-          <button className="dangerBtn soft" onClick={clearAllLocalData}>
-            Xóa toàn bộ local
-          </button>
         </div>
+
+        {showUtilities && (
+          <div className="utilityPanel">
+            <div className="utilityGroup">
+              <div className="utilityTitle">Quản lý log & dữ liệu</div>
+              <div className="utilityButtons">
+                <button className="dangerBtn" onClick={clearLogs}>
+                  Xóa log local
+                </button>
+                <button className="dangerBtn cloud" onClick={clearForwardLogsCloud}>
+                  Xóa Forward Log cloud
+                </button>
+                <button className="secondary" onClick={clearLearningStats}>
+                  Xóa Learning
+                </button>
+                <button className="dangerBtn soft" onClick={clearAllLocalData}>
+                  Xóa toàn bộ local
+                </button>
+              </div>
+            </div>
+
+            <div className="utilityGroup">
+              <div className="utilityTitle">Triển khai & cấu hình</div>
+              <div className="utilityButtons">
+                <button className="secondary" onClick={() => setShowSql(!showSql)}>
+                  {showSql ? "Ẩn SQL" : "Hiện SQL Supabase"}
+                </button>
+                <button className="secondary" onClick={() => navigator.clipboard.writeText(SCHEMA_SQL + "
+
+" + RLS_SQL)}>
+                  Copy SQL
+                </button>
+                <button className="secondary" onClick={() => setShowWorker(!showWorker)}>
+                  {showWorker ? "Ẩn Worker" : "Hiện Worker Proxy"}
+                </button>
+                <button className="secondary" onClick={() => navigator.clipboard.writeText(WORKER_CODE)}>
+                  Copy Worker
+                </button>
+              </div>
+            </div>
+
+            {(showSql || showWorker) && (
+              <div className="utilityDocs">
+                {showSql && <pre>{SCHEMA_SQL + "
+
+" + RLS_SQL}</pre>}
+                {showWorker && <pre>{WORKER_CODE}</pre>}
+              </div>
+            )}
+          </div>
+        )}
       </Panel>
 
       <div className="filters">
@@ -1733,213 +1786,192 @@ export default function App() {
         ))}
       </div>
 
-      <section className="signals">
-        {filtered.map((s) => {
-          const log = forwardLogs.find((l) => l.signalId === s.id);
-          const orderWarnings = orderCompatibilityWarnings(s);
+      <div className="mainLayout">
+        <section className="mainColumn">
+          <section className="signals">
+            {filtered.map((s) => {
+              const log = forwardLogs.find((l) => l.signalId === s.id);
+              const orderWarnings = orderCompatibilityWarnings(s);
 
-          return (
-            <Panel key={s.id} className="signal">
-              <div className="signalHead">
-                <div>
-                  <h2 className="symbolLink" onClick={() => openBinanceFutures(s.symbol)} title="Mở trên Binance Futures">
-                    {s.symbol}
-                  </h2>
-                  <div className="muted">
-                    {s.setup} · {viRegime(s.regime)} · Điểm {s.score}/100
-                  </div>
-                </div>
-
-                <div className="badges">
-                  <Badge tone={s.side === "LONG" ? "green" : s.side === "SHORT" ? "red" : "neutral"}>
-                    {s.side === "LONG" ? "LONG / MUA" : s.side === "SHORT" ? "SHORT / BÁN" : "TRUNG LẬP"}
-                  </Badge>
-                  <Badge tone={s.grade === "A+" ? "purple" : s.grade === "A" ? "green" : s.grade === "B" ? "blue" : "yellow"}>
-                    {s.grade}
-                  </Badge>
-                  <Badge tone={displayActionTone(s, log)}>{displayAction(s, log)}</Badge>
-                </div>
-              </div>
-
-              <div className="priceGrid">
-                <div>
-                  <span>Vùng Entry</span>
-                  <b>
-                    {fmt(s.entryLow)} - {fmt(s.entryHigh)}
-                  </b>
-                </div>
-                <div>
-                  <span>Entry tốt nhất</span>
-                  <b>{fmt(s.bestEntry)}</b>
-                </div>
-                <div>
-                  <span>SL</span>
-                  <b className="redText">{fmt(s.sl)}</b>
-                </div>
-                <div>
-                  <span>TP1 / TP2</span>
-                  <b className="greenText">
-                    {fmt(s.tp1)} / {fmt(s.tp2)}
-                  </b>
-                </div>
-              </div>
-
-              <div className="miniGrid">
-                <div>
-                  Đòn bẩy <b>x{s.leverage}</b>
-                </div>
-                <div>
-                  Ký quỹ <b>{s.margin}</b>
-                </div>
-                <div>
-                  Rủi ro <b>{s.riskUsdt}</b>
-                </div>
-                <div>
-                  RR <b>{s.rr}</b>
-                </div>
-              </div>
-
-              {orderWarnings.length > 0 && (
-                <div className="log danger">
-                  {orderWarnings.map((warning, index) => (
-                    <div key={index}>⚠ {warning}</div>
-                  ))}
-                </div>
-              )}
-
-              <div className="notes">
-                {s.reasons.map((r, i) => (
-                  <p key={i}>• {r}</p>
-                ))}
-                {s.warnings.map((w, i) => (
-                  <p key={i} className="warn">
-                    ⚠ {w}
-                  </p>
-                ))}
-                {s.blocks.map((b, i) => (
-                  <p key={i} className="danger">
-                    ⛔ Bị chặn: {b}
-                  </p>
-                ))}
-              </div>
-
-              {log && (
-                <div className="log">
-                  <b>
-                    Forward Test: {viStatus(log.status)} · {log.resultR}R · Entry tính theo Entry tốt nhất
-                  </b>
-                  {log.replay.map((line, i) => (
-                    <div key={i}>
-                      {i + 1}. {line}
+              return (
+                <Panel key={s.id} className="signal">
+                  <div className="signalHead">
+                    <div>
+                      <h2 className="symbolLink" onClick={() => openBinanceFutures(s.symbol)} title="Mở trên Binance Futures">
+                        {s.symbol}
+                      </h2>
+                      <div className="muted">
+                        {s.setup} · {viRegime(s.regime)} · Điểm {s.score}/100
+                      </div>
                     </div>
-                  ))}
-                </div>
-              )}
+
+                    <div className="badges">
+                      <Badge tone={s.side === "LONG" ? "green" : s.side === "SHORT" ? "red" : "neutral"}>
+                        {s.side === "LONG" ? "LONG / MUA" : s.side === "SHORT" ? "SHORT / BÁN" : "TRUNG LẬP"}
+                      </Badge>
+                      <Badge tone={s.grade === "A+" ? "purple" : s.grade === "A" ? "green" : s.grade === "B" ? "blue" : "yellow"}>
+                        {s.grade}
+                      </Badge>
+                      <Badge tone={displayActionTone(s, log)}>{displayAction(s, log)}</Badge>
+                    </div>
+                  </div>
+
+                  <div className="priceGrid">
+                    <div>
+                      <span>Vùng Entry</span>
+                      <b>
+                        {fmt(s.entryLow)} - {fmt(s.entryHigh)}
+                      </b>
+                    </div>
+                    <div>
+                      <span>Entry tốt nhất</span>
+                      <b>{fmt(s.bestEntry)}</b>
+                    </div>
+                    <div>
+                      <span>SL</span>
+                      <b className="redText">{fmt(s.sl)}</b>
+                    </div>
+                    <div>
+                      <span>TP1 / TP2</span>
+                      <b className="greenText">
+                        {fmt(s.tp1)} / {fmt(s.tp2)}
+                      </b>
+                    </div>
+                  </div>
+
+                  <div className="miniGrid">
+                    <div>
+                      Đòn bẩy <b>x{s.leverage}</b>
+                    </div>
+                    <div>
+                      Ký quỹ <b>{s.margin}</b>
+                    </div>
+                    <div>
+                      Rủi ro <b>{s.riskUsdt}</b>
+                    </div>
+                    <div>
+                      RR <b>{s.rr}</b>
+                    </div>
+                  </div>
+
+                  {orderWarnings.length > 0 && (
+                    <div className="log danger">
+                      {orderWarnings.map((warning, index) => (
+                        <div key={index}>⚠ {warning}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="notes">
+                    {s.reasons.map((r, i) => (
+                      <p key={i}>• {r}</p>
+                    ))}
+                    {s.warnings.map((w, i) => (
+                      <p key={i} className="warn">
+                        ⚠ {w}
+                      </p>
+                    ))}
+                    {s.blocks.map((b, i) => (
+                      <p key={i} className="danger">
+                        ⛔ Bị chặn: {b}
+                      </p>
+                    ))}
+                  </div>
+
+                  {log && (
+                    <div className="log">
+                      <b>
+                        Forward Test: {viStatus(log.status)} · {log.resultR}R · Entry tính theo Entry tốt nhất
+                      </b>
+                      {log.replay.map((line, i) => (
+                        <div key={i}>
+                          {i + 1}. {line}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Panel>
+              );
+            })}
+          </section>
+        </section>
+
+        <aside className="sideColumn">
+          <Panel>
+            <div className="sectionHeader">
+              <div>
+                <h2>Learning Dashboard</h2>
+                <p className="muted">Theo dõi các nhóm symbol/setup/regime đang mạnh hay yếu để tool học dần từ Forward Log.</p>
+              </div>
+            </div>
+            {learningStats.length === 0 && <div className="muted">Chưa có Learning Stats. Hãy chạy Forward Test 1m rồi bấm Rebuild Learning.</div>}
+            {learningStats.length > 0 && (
+              <div className="learningGrid compact">
+                {learningStats.slice(0, 6).map((stat) => (
+                  <div key={stat.key} className="learningCard">
+                    <div className="learningTop">
+                      <b>{stat.label}</b>
+                      <Badge tone={stat.bias === "GOOD" ? "green" : stat.bias === "WEAK" ? "red" : "neutral"}>{stat.bias}</Badge>
+                    </div>
+                    <div className="learningStats">
+                      <span>Mẫu: <b>{stat.sampleSize}</b></span>
+                      <span>Win: <b>{stat.winrate}%</b></span>
+                      <span>Avg R: <b>{stat.avgR}</b></span>
+                      <span>Entry: <b>{stat.entryHitRate}%</b></span>
+                      <span>SL: <b>{stat.slRate}%</b></span>
+                      <span>TP2: <b>{stat.tp2Rate}%</b></span>
+                    </div>
+                    {stat.commonFailureReason && <div className="muted">Lỗi thường gặp: {stat.commonFailureReason}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+
+          {showGuidebook && (
+            <Panel>
+              <h2>Guidebook nhanh</h2>
+              <div className="guidebook">
+                <h3>Quy trình dùng chuẩn</h3>
+                <ol>
+                  <li>Đồng bộ Supabase khi vừa đổi thiết bị.</li>
+                  <li>Kiểm tra vốn, rủi ro, số lệnh tối đa và nguồn dữ liệu.</li>
+                  <li>Phân tích tín hiệu mới.</li>
+                  <li>Chạy Forward Test 1m.</li>
+                  <li>Rebuild Learning.</li>
+                  <li>Đồng bộ lại Supabase.</li>
+                </ol>
+                <h3>Nguyên tắc quan trọng</h3>
+                <p>Forward Test chỉ tính khớp lệnh khi giá chạm Entry tốt nhất. Learning Engine chỉ điều chỉnh rõ khi có tối thiểu 5 mẫu để tránh overfit.</p>
+              </div>
             </Panel>
-          );
-        })}
-      </section>
+          )}
 
+          <Panel>
+            <h2>Nhật ký lệnh thật</h2>
+            <div className="journal">
+              <input
+                placeholder="Ghi chú lệnh thật / tâm lý / lý do vào lệnh..."
+                value={journalNote}
+                onChange={(e) => setJournalNote(e.target.value)}
+              />
+              <button onClick={addJournal}>Thêm ghi chú</button>
+            </div>
+          </Panel>
 
-      <Panel>
-        <h2>Learning Dashboard</h2>
-        <p className="muted">
-          Forward Log hiện được dùng để học symbol/setup/regime nào tốt hơn, điều chỉnh score, Entry tốt nhất, TP2 và SL cho tín hiệu mới. Dữ liệu dưới 5 mẫu chỉ quan sát, chưa điều chỉnh mạnh.
-        </p>
-        {learningStats.length === 0 && <div className="muted">Chưa có Learning Stats. Hãy chạy Forward Test 1m rồi bấm Rebuild Learning.</div>}
-        {learningStats.length > 0 && (
-          <div className="learningGrid">
-            {learningStats.slice(0, 8).map((stat) => (
-              <div key={stat.key} className="learningCard">
-                <div className="learningTop">
-                  <b>{stat.label}</b>
-                  <Badge tone={stat.bias === "GOOD" ? "green" : stat.bias === "WEAK" ? "red" : "neutral"}>{stat.bias}</Badge>
-                </div>
-                <div className="learningStats">
-                  <span>Mẫu: <b>{stat.sampleSize}</b></span>
-                  <span>Win: <b>{stat.winrate}%</b></span>
-                  <span>Avg R: <b>{stat.avgR}</b></span>
-                  <span>Entry: <b>{stat.entryHitRate}%</b></span>
-                  <span>SL: <b>{stat.slRate}%</b></span>
-                  <span>TP2: <b>{stat.tp2Rate}%</b></span>
-                </div>
-                {stat.commonFailureReason && <div className="muted">Lỗi thường gặp: {stat.commonFailureReason}</div>}
+          <Panel>
+            <h2>Nhật ký hệ thống</h2>
+            {auditLogs.slice(0, 8).map((l) => (
+              <div key={l.id} className="audit">
+                <span>{l.message}</span>
+                <span>{time(l.at)}</span>
               </div>
             ))}
-          </div>
-        )}
-      </Panel>
-
-      {showGuidebook && (
-        <Panel>
-          <h2>Guidebook nhanh</h2>
-          <div className="guidebook">
-            <h3>1. Tool này dùng để làm gì?</h3>
-            <p>Tool hỗ trợ quyết định trade futures thủ công. Tool không tự vào lệnh và không phải grid bot.</p>
-            <h3>2. Quy trình dùng chuẩn</h3>
-            <ol>
-              <li>Bấm Đồng bộ Supabase khi đổi thiết bị.</li>
-              <li>Kiểm tra vốn, rủi ro, số lệnh tối đa và nguồn dữ liệu.</li>
-              <li>Bấm Phân tích để tạo tín hiệu.</li>
-              <li>Bấm Chạy Forward Test 1m để kiểm tra tín hiệu bằng nến 1 phút.</li>
-              <li>Bấm Rebuild Learning để cập nhật thống kê học.</li>
-              <li>Bấm Đồng bộ Supabase để lưu dữ liệu.</li>
-            </ol>
-            <h3>3. Forward Test hoạt động ra sao?</h3>
-            <p>Forward Test chỉ xem là đã vào lệnh khi giá chạm Entry tốt nhất. Entry Zone chỉ là vùng tham khảo.</p>
-            <h3>4. Learning Engine học gì?</h3>
-            <p>Learning Engine gom Forward Log theo symbol, hướng LONG/SHORT, setup và trạng thái thị trường để tính winrate, avg R, entry hit rate, SL rate, TP rate. Từ đó tool điều chỉnh score, entry, TP2 và SL cho tín hiệu mới.</p>
-            <h3>5. Khi nào xóa Forward Log cloud?</h3>
-            <p>Khi bạn đổi logic test, dữ liệu cũ bị nhiễu, hoặc muốn bắt đầu lại bộ log học mới.</p>
-            <h3>6. Lưu ý rủi ro</h3>
-            <p>Dữ liệu học cần đủ mẫu. Dưới 5 mẫu chỉ nên xem tham khảo để tránh overfit.</p>
-          </div>
-        </Panel>
-      )}
-
-      <Panel>
-        <h2>Nhật ký lệnh thật</h2>
-        <div className="journal">
-          <input
-            placeholder="Ghi chú lệnh thật / tâm lý / lý do vào lệnh..."
-            value={journalNote}
-            onChange={(e) => setJournalNote(e.target.value)}
-          />
-          <button onClick={addJournal}>Thêm ghi chú</button>
-        </div>
-      </Panel>
-
-      <Panel>
-        <h2>Nhật ký hệ thống</h2>
-        {auditLogs.slice(0, 8).map((l) => (
-          <div key={l.id} className="audit">
-            <span>{l.message}</span>
-            <span>{time(l.at)}</span>
-          </div>
-        ))}
-        {!auditLogs.length && <div className="muted">Chưa có sự kiện hệ thống.</div>}
-      </Panel>
-
-      <Panel>
-        <h2>SQL và Worker triển khai</h2>
-        <div className="actions">
-          <button className="secondary" onClick={() => setShowSql(!showSql)}>
-            {showSql ? "Ẩn SQL" : "Hiện SQL Supabase"}
-          </button>
-          <button className="secondary" onClick={() => navigator.clipboard.writeText(SCHEMA_SQL + "\n\n" + RLS_SQL)}>
-            Copy SQL
-          </button>
-          <button className="secondary" onClick={() => setShowWorker(!showWorker)}>
-            {showWorker ? "Ẩn Worker" : "Hiện Worker Proxy"}
-          </button>
-          <button className="secondary" onClick={() => navigator.clipboard.writeText(WORKER_CODE)}>
-            Copy Worker
-          </button>
-        </div>
-
-        {showSql && <pre>{SCHEMA_SQL + "\n\n" + RLS_SQL}</pre>}
-        {showWorker && <pre>{WORKER_CODE}</pre>}
-      </Panel>
+            {!auditLogs.length && <div className="muted">Chưa có sự kiện hệ thống.</div>}
+          </Panel>
+        </aside>
+      </div>
     </div>
   );
 }
+
