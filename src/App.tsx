@@ -55,6 +55,13 @@ type AppConfig = {
   supabaseAnonKey: string;
 };
 
+type SymbolRule = {
+  symbol: string;
+  minNotional: number;
+  minQty: number;
+  stepSize: number;
+};
+
 type Signal = {
   id: string;
   symbol: string;
@@ -88,13 +95,31 @@ type ForwardLog = {
   resultR: number;
   replay: string[];
   failureReason?: string;
-  testedAt?: number;
-  forwardRunId?: string;
   entryHit?: boolean;
   entryHitMinutes?: number;
   maxFavorableR?: number;
   maxAdverseR?: number;
 };
+
+type LearningBias = "GOOD" | "NEUTRAL" | "WEAK";
+
+type LearningStat = {
+  key: string;
+  label: string;
+  sampleSize: number;
+  winrate: number;
+  avgR: number;
+  entryHitRate: number;
+  noEntryRate: number;
+  slRate: number;
+  tp1Rate: number;
+  tp2Rate: number;
+  avgMaxFavorableR: number;
+  avgMaxAdverseR: number;
+  commonFailureReason?: string;
+  bias: LearningBias;
+};
+
 
 type AuditLog = {
   id: string;
@@ -108,6 +133,7 @@ type PersistentState = {
   auditLogs: AuditLog[];
   config: AppConfig;
   darkMode?: boolean;
+  learningStats?: LearningStat[];
   updatedAt: number;
 };
 
@@ -123,6 +149,24 @@ const SYMBOLS = [
 ];
 
 const LOCAL_KEY = "fta_v4_standalone_state";
+
+const FALLBACK_SYMBOL_RULES: Record<string, SymbolRule> = {
+  BTCUSDT: { symbol: "BTCUSDT", minNotional: 100, minQty: 0.001, stepSize: 0.001 },
+  ETHUSDT: { symbol: "ETHUSDT", minNotional: 20, minQty: 0.001, stepSize: 0.001 },
+  BNBUSDT: { symbol: "BNBUSDT", minNotional: 20, minQty: 0.01, stepSize: 0.01 },
+  SOLUSDT: { symbol: "SOLUSDT", minNotional: 10, minQty: 0.1, stepSize: 0.1 },
+  LINKUSDT: { symbol: "LINKUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  OPUSDT: { symbol: "OPUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  ARBUSDT: { symbol: "ARBUSDT", minNotional: 5, minQty: 0.1, stepSize: 0.1 },
+  DOGEUSDT: { symbol: "DOGEUSDT", minNotional: 5, minQty: 1, stepSize: 1 },
+};
+
+const DEFAULT_SYMBOL_RULE: SymbolRule = {
+  symbol: "DEFAULT",
+  minNotional: 5,
+  minQty: 0,
+  stepSize: 0,
+};
 
 const DEFAULT_CONFIG: AppConfig = {
   capital: 15,
@@ -319,8 +363,127 @@ function viStatus(s: ForwardStatus) {
   return map[s];
 }
 
+function isTerminalForwardStatus(status?: ForwardStatus) {
+  return status === "TP1_HIT" || status === "TP2_HIT" || status === "SL_HIT" || status === "BE_HIT" || status === "EXPIRED";
+}
+
+function displayAction(signal: Signal, log?: ForwardLog) {
+  if (!log) return viAction(signal.action);
+
+  if (log.status === "SL_HIT") return "Đã chạm SL";
+  if (log.status === "TP1_HIT") return "Đã chạm TP1";
+  if (log.status === "TP2_HIT") return "Đã chạm TP2";
+  if (log.status === "BE_HIT") return "Đã về hòa vốn";
+  if (log.status === "EXPIRED") return "Tín hiệu hết hạn";
+  if (log.status === "NO_ENTRY") return "Chưa khớp Entry tốt nhất";
+  if (log.status === "ENTRY_HIT") return "Đã vào lệnh";
+
+  return viAction(signal.action);
+}
+
+function displayActionTone(
+  signal: Signal,
+  log?: ForwardLog
+): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+  if (!log) {
+    if (signal.action === "ENTRY_OK") return "green";
+    if (signal.action === "HIGH_RISK" || signal.action === "BAD_RR" || signal.action === "AVOID" || signal.action === "NO_TRADE") {
+      return "red";
+    }
+    return "yellow";
+  }
+
+  if (log.status === "TP1_HIT" || log.status === "TP2_HIT" || log.status === "BE_HIT") return "green";
+  if (log.status === "SL_HIT") return "red";
+  if (log.status === "ENTRY_HIT") return "blue";
+  if (log.status === "NO_ENTRY" || log.status === "EXPIRED") return "neutral";
+
+  return "yellow";
+}
+
+function orderCompatibilityWarnings(signal: Signal) {
+  const warnings: string[] = [];
+  const notional = signal.margin * signal.leverage;
+  const fallbackRule = getFallbackRule(signal.symbol);
+  const fallbackMinNotional = fallbackRule.minNotional;
+
+  if (notional < fallbackMinNotional) {
+    warnings.push(`Notional ước tính ${roundUp(notional, 2)} USDT thấp hơn rule dự phòng của ${signal.symbol}: ${fallbackMinNotional} USDT.`);
+  }
+
+  return warnings;
+}
+
 function openBinanceFutures(symbol: string) {
   window.open(`https://www.binance.com/vi/futures/${symbol}`, "_blank", "noopener,noreferrer");
+}
+
+function roundUp(value: number, decimals = 2) {
+  const factor = Math.pow(10, decimals);
+  return Math.ceil(value * factor) / factor;
+}
+
+function getFallbackRule(symbol: string): SymbolRule {
+  return FALLBACK_SYMBOL_RULES[symbol] || { ...DEFAULT_SYMBOL_RULE, symbol };
+}
+
+function getRequiredMarginBySymbol(symbol: string, price: number, leverage: number, rules: Record<string, SymbolRule>) {
+  const rule = rules[symbol] || getFallbackRule(symbol);
+  const minQtyNotional = rule.minQty > 0 ? rule.minQty * price : 0;
+  const requiredNotional = Math.max(rule.minNotional || 0, minQtyNotional || 0, DEFAULT_SYMBOL_RULE.minNotional);
+  const requiredMargin = roundUp(requiredNotional / Math.max(leverage, 1) + 0.02, 2);
+
+  return {
+    rule,
+    minQtyNotional,
+    requiredNotional,
+    requiredMargin,
+  };
+}
+
+function parseSymbolRules(raw: any): Record<string, SymbolRule> {
+  const out: Record<string, SymbolRule> = {};
+
+  if (!raw || !Array.isArray(raw.symbols)) return out;
+
+  for (const symbolInfo of raw.symbols) {
+    if (!symbolInfo || typeof symbolInfo.symbol !== "string") continue;
+    if (!SYMBOLS.includes(symbolInfo.symbol)) continue;
+
+    const filters = Array.isArray(symbolInfo.filters) ? symbolInfo.filters : [];
+    const minNotionalFilter = filters.find((f: any) => f.filterType === "MIN_NOTIONAL" || f.filterType === "NOTIONAL");
+    const lotFilter =
+      filters.find((f: any) => f.filterType === "MARKET_LOT_SIZE") ||
+      filters.find((f: any) => f.filterType === "LOT_SIZE");
+
+    out[symbolInfo.symbol] = {
+      symbol: symbolInfo.symbol,
+      minNotional: Number(minNotionalFilter?.notional ?? minNotionalFilter?.minNotional ?? DEFAULT_SYMBOL_RULE.minNotional),
+      minQty: Number(lotFilter?.minQty ?? 0),
+      stepSize: Number(lotFilter?.stepSize ?? 0),
+    };
+  }
+
+  return out;
+}
+
+async function fetchSymbolRules(config: AppConfig): Promise<Record<string, SymbolRule>> {
+  try {
+    const url =
+      config.dataSourceMode === "WORKER_PROXY"
+        ? `${config.workerProxyUrl.replace(/\/$/, "")}/exchangeInfo`
+        : "https://fapi.binance.com/fapi/v1/exchangeInfo";
+
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`exchangeInfo lỗi ${res.status}`);
+
+    const raw = await res.json();
+    const parsed = parseSymbolRules(raw);
+
+    return { ...FALLBACK_SYMBOL_RULES, ...parsed };
+  } catch {
+    return { ...FALLBACK_SYMBOL_RULES };
+  }
 }
 
 function generateMockCandles(symbol: string, interval: string, limit = 240): Candle[] {
@@ -454,7 +617,7 @@ function inferBtcBias(candles: Candle[]): BtcBias {
   return "BTC_NEUTRAL";
 }
 
-function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config: AppConfig): Signal {
+function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config: AppConfig, symbolRules: Record<string, SymbolRule>): Signal {
   const closes = candles.map((c) => c.close);
   const last = candles[candles.length - 1];
   const price = last?.close || basePrice(symbol);
@@ -501,6 +664,7 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
 
   if (regime === "HIGH_VOLATILITY") warnings.push("Thị trường biến động mạnh, nên giảm đòn bẩy.");
   if (regime === "CHOPPY") warnings.push("Thị trường nhiễu, ưu tiên chờ entry đẹp.");
+  const budgetPerTrade = config.capital / Math.max(config.maxActiveTrades, 1);
   if (rr < 1.2) blocks.push("RR_XAU");
   if (side === "LONG" && btcBias === "BTC_DUMP_RISK") blocks.push("BTC_DUMP_CHAN_LONG");
   if (side === "SHORT" && btcBias === "BTC_PUMP_RISK") blocks.push("BTC_PUMP_CHAN_SHORT");
@@ -525,7 +689,22 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
 
   const maxLev = config.riskMode === "AGGRESSIVE" ? 40 : config.riskMode === "NORMAL" ? 30 : 20;
   const leverage = grade === "A+" ? maxLev : grade === "A" ? Math.min(maxLev, 25) : Math.min(maxLev, 15);
-  const margin = Math.max(3, Math.min(config.capital / Math.max(config.maxActiveTrades, 1), config.capital * 0.55));
+  const suggestedBudgetPerTrade = config.capital / Math.max(config.maxActiveTrades, 1);
+  const marginRule = getRequiredMarginBySymbol(symbol, price, leverage, symbolRules);
+  const margin = Math.max(marginRule.requiredMargin, suggestedBudgetPerTrade);
+
+  if (marginRule.requiredMargin > suggestedBudgetPerTrade) {
+    warnings.push(
+      `${symbol} cần ký quỹ tối thiểu khoảng ${marginRule.requiredMargin} USDT/lệnh theo rule symbol hiện tại. Tool đã điều chỉnh ký quỹ theo symbol, không dùng mức cố định.`
+    );
+  }
+
+  if (margin * config.maxActiveTrades > config.capital) {
+    warnings.push(
+      `Vốn ${config.capital} USDT không đủ để mở đồng thời ${config.maxActiveTrades} lệnh nếu mỗi lệnh cần khoảng ${roundUp(margin, 2)} USDT. Nên giảm Số lệnh tối đa.`
+    );
+  }
+
   const riskUsdt =
     grade === "NO_TRADE"
       ? 0
@@ -554,7 +733,7 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
     tp1,
     tp2,
     leverage,
-    margin: Number(margin.toFixed(2)),
+    margin: roundUp(margin, 2),
     riskUsdt: Number(riskUsdt.toFixed(2)),
     rr: Number(rr.toFixed(2)),
     regime,
@@ -566,8 +745,8 @@ function buildSignal(symbol: string, candles: Candle[], btcBias: BtcBias, config
   };
 }
 
-function touchEntry(signal: Signal, candle: Candle) {
-  return candle.high >= signal.entryLow && candle.low <= signal.entryHigh;
+function touchBestEntry(signal: Signal, candle: Candle) {
+  return candle.low <= signal.bestEntry && candle.high >= signal.bestEntry;
 }
 
 function touchTp(signal: Signal, candle: Candle, tp: number) {
@@ -613,6 +792,10 @@ function executeRealForwardTest1m(signal: Signal, candles1m: Candle[]): ForwardL
   let entered = false;
   let tp1Hit = false;
   let breakEvenActive = false;
+  let entryTime = 0;
+  let maxFavorableR = 0;
+  let maxAdverseR = 0;
+  const riskPerUnit = Math.max(Math.abs(signal.bestEntry - signal.sl), 1e-9);
 
   for (const candle of candles) {
     if (!entered) {
@@ -627,13 +810,30 @@ function executeRealForwardTest1m(signal: Signal, candles1m: Candle[]): ForwardL
         };
       }
 
-      if (touchEntry(signal, candle)) {
+      if (touchBestEntry(signal, candle)) {
         entered = true;
-        replay.push(`Giá đã chạm vùng entry lúc ${time(candle.time)}.`);
+        entryTime = candle.time;
+        replay.push(`Giá đã khớp Entry tốt nhất lúc ${time(candle.time)} tại ${fmt(signal.bestEntry)}.`);
       }
 
       continue;
     }
+
+    const favorableR =
+      signal.side === "LONG"
+        ? (candle.high - signal.bestEntry) / riskPerUnit
+        : signal.side === "SHORT"
+          ? (signal.bestEntry - candle.low) / riskPerUnit
+          : 0;
+    const adverseR =
+      signal.side === "LONG"
+        ? (candle.low - signal.bestEntry) / riskPerUnit
+        : signal.side === "SHORT"
+          ? (signal.bestEntry - candle.high) / riskPerUnit
+          : 0;
+
+    maxFavorableR = Math.max(maxFavorableR, favorableR);
+    maxAdverseR = Math.min(maxAdverseR, adverseR);
 
     const slPrice = breakEvenActive ? signal.bestEntry : signal.sl;
     const hitSl = touchSl(signal, candle, slPrice);
@@ -646,6 +846,10 @@ function executeRealForwardTest1m(signal: Signal, candles1m: Candle[]): ForwardL
         signalId: signal.id,
         status: "SL_HIT",
         resultR: -1,
+        entryHit: true,
+        entryHitMinutes: entryTime ? Math.round((entryTime - signal.signalTime) / 60000) : undefined,
+        maxFavorableR: Math.round(maxFavorableR * 100) / 100,
+        maxAdverseR: Math.round(maxAdverseR * 100) / 100,
         failureReason: "INTRABAR_CONSERVATIVE_SL",
         replay,
       };
@@ -658,6 +862,10 @@ function executeRealForwardTest1m(signal: Signal, candles1m: Candle[]): ForwardL
           signalId: signal.id,
           status: "BE_HIT",
           resultR: 0.45,
+          entryHit: true,
+          entryHitMinutes: entryTime ? Math.round((entryTime - signal.signalTime) / 60000) : undefined,
+          maxFavorableR: Math.round(maxFavorableR * 100) / 100,
+          maxAdverseR: Math.round(maxAdverseR * 100) / 100,
           failureReason: "TP1_THEN_BE",
           replay,
         };
@@ -668,6 +876,10 @@ function executeRealForwardTest1m(signal: Signal, candles1m: Candle[]): ForwardL
         signalId: signal.id,
         status: "SL_HIT",
         resultR: -1,
+        entryHit: true,
+        entryHitMinutes: entryTime ? Math.round((entryTime - signal.signalTime) / 60000) : undefined,
+        maxFavorableR: Math.round(maxFavorableR * 100) / 100,
+        maxAdverseR: Math.round(maxAdverseR * 100) / 100,
         failureReason: "SL_HIT",
         replay,
       };
@@ -685,6 +897,10 @@ function executeRealForwardTest1m(signal: Signal, candles1m: Candle[]): ForwardL
         signalId: signal.id,
         status: "TP2_HIT",
         resultR: 1.55,
+        entryHit: true,
+        entryHitMinutes: entryTime ? Math.round((entryTime - signal.signalTime) / 60000) : undefined,
+        maxFavorableR: Math.round(maxFavorableR * 100) / 100,
+        maxAdverseR: Math.round(maxAdverseR * 100) / 100,
         replay,
       };
     }
@@ -696,6 +912,10 @@ function executeRealForwardTest1m(signal: Signal, candles1m: Candle[]): ForwardL
       signalId: signal.id,
       status: "TP1_HIT",
       resultR: 0.45,
+      entryHit: true,
+      entryHitMinutes: entryTime ? Math.round((entryTime - signal.signalTime) / 60000) : undefined,
+      maxFavorableR: Math.round(maxFavorableR * 100) / 100,
+      maxAdverseR: Math.round(maxAdverseR * 100) / 100,
       replay,
     };
   }
@@ -706,11 +926,15 @@ function executeRealForwardTest1m(signal: Signal, candles1m: Candle[]): ForwardL
       signalId: signal.id,
       status: "ENTRY_HIT",
       resultR: 0,
+      entryHit: true,
+      entryHitMinutes: entryTime ? Math.round((entryTime - signal.signalTime) / 60000) : undefined,
+      maxFavorableR: Math.round(maxFavorableR * 100) / 100,
+      maxAdverseR: Math.round(maxAdverseR * 100) / 100,
       replay,
     };
   }
 
-  replay.push("Giá chưa chạm vùng entry.");
+  replay.push("Giá chưa khớp Entry tốt nhất.");
   return {
     signalId: signal.id,
     status: "NO_ENTRY",
@@ -783,71 +1007,6 @@ async function pushSupabase(config: AppConfig, state: PersistentState) {
   });
 }
 
-
-function getForwardLogTime(log: ForwardLog) {
-  return log.testedAt || 0;
-}
-
-function pickLatestForwardLog(a: ForwardLog, b: ForwardLog) {
-  const aTime = getForwardLogTime(a);
-  const bTime = getForwardLogTime(b);
-
-  if (bTime > aTime) return b;
-  if (aTime > bTime) return a;
-
-  const aRank = forwardStatusRank(a.status);
-  const bRank = forwardStatusRank(b.status);
-
-  return bRank >= aRank ? b : a;
-}
-
-function forwardStatusRank(status: ForwardStatus) {
-  const rank: Record<ForwardStatus, number> = {
-    WAITING_ENTRY: 0,
-    NO_ENTRY: 1,
-    EXPIRED: 2,
-    ENTRY_HIT: 3,
-    BE_HIT: 4,
-    SL_HIT: 5,
-    TP1_HIT: 6,
-    TP2_HIT: 7,
-  };
-
-  return rank[status] ?? 0;
-}
-
-function mergeForwardLogsKeepLatest(localLogs: ForwardLog[], remoteLogs: ForwardLog[]) {
-  const merged = new Map<string, ForwardLog>();
-
-  for (const remote of remoteLogs) {
-    if (!remote?.signalId) continue;
-    merged.set(remote.signalId, remote);
-  }
-
-  for (const local of localLogs) {
-    if (!local?.signalId) continue;
-
-    const existing = merged.get(local.signalId);
-
-    if (!existing) {
-      merged.set(local.signalId, local);
-      continue;
-    }
-
-    merged.set(local.signalId, pickLatestForwardLog(existing, local));
-  }
-
-  return Array.from(merged.values());
-}
-
-function ensureForwardLogMeta(log: ForwardLog, forwardRunId: string, testedAt: number) {
-  return {
-    ...log,
-    forwardRunId: log.forwardRunId || forwardRunId,
-    testedAt: log.testedAt || testedAt,
-  };
-}
-
 async function pullSupabase(config: AppConfig): Promise<Partial<PersistentState>> {
   if (!config.supabaseUrl || !config.supabaseAnonKey) return {};
 
@@ -874,6 +1033,227 @@ async function pullSupabase(config: AppConfig): Promise<Partial<PersistentState>
   };
 }
 
+function keepLatestSignalPerSymbol(inputSignals: Signal[]) {
+  const map = new Map<string, Signal>();
+
+  for (const signal of inputSignals) {
+    const existing = map.get(signal.symbol);
+
+    if (!existing) {
+      map.set(signal.symbol, signal);
+      continue;
+    }
+
+    if (signal.signalTime > existing.signalTime) {
+      map.set(signal.symbol, signal);
+      continue;
+    }
+
+    if (signal.signalTime === existing.signalTime && signal.score > existing.score) {
+      map.set(signal.symbol, signal);
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => b.score - a.score);
+}
+
+
+function isWinningLog(log: ForwardLog) {
+  return log.status === "TP1_HIT" || log.status === "TP2_HIT" || log.status === "BE_HIT" || log.resultR > 0;
+}
+
+function avg(values: number[]) {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function pct(count: number, total: number) {
+  if (!total) return 0;
+  return Math.round((count / total) * 1000) / 10;
+}
+
+function commonFailure(logs: ForwardLog[]) {
+  const map = new Map<string, number>();
+
+  for (const log of logs) {
+    if (!log.failureReason) continue;
+    map.set(log.failureReason, (map.get(log.failureReason) || 0) + 1);
+  }
+
+  return Array.from(map.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
+}
+
+function buildLearningStats(signals: Signal[], logs: ForwardLog[]) {
+  const signalMap = new Map(signals.map((signal) => [signal.id, signal]));
+  const groups = new Map<string, { label: string; logs: ForwardLog[] }>();
+
+  function addGroup(key: string, label: string, log: ForwardLog) {
+    if (!groups.has(key)) groups.set(key, { label, logs: [] });
+    groups.get(key)?.logs.push(log);
+  }
+
+  for (const log of logs) {
+    const signal = signalMap.get(log.signalId);
+    if (!signal) continue;
+    if (log.status === "WAITING_ENTRY") continue;
+
+    addGroup(`symbol:${signal.symbol}`, `Symbol · ${signal.symbol}`, log);
+    addGroup(`side:${signal.side}`, `Hướng · ${signal.side}`, log);
+    addGroup(`setup:${signal.setup}`, `Setup · ${signal.setup}`, log);
+    addGroup(`regime:${signal.regime}`, `Thị trường · ${viRegime(signal.regime)}`, log);
+    addGroup(`symbol-side:${signal.symbol}:${signal.side}`, `${signal.symbol} · ${signal.side}`, log);
+    addGroup(`symbol-setup:${signal.symbol}:${signal.setup}`, `${signal.symbol} · ${signal.setup}`, log);
+  }
+
+  return Array.from(groups.entries())
+    .map(([key, group]) => {
+      const sampleSize = group.logs.length;
+      const wins = group.logs.filter(isWinningLog).length;
+      const winrate = pct(wins, sampleSize);
+      const avgR = avg(group.logs.map((log) => log.resultR));
+      const entryHitRate = pct(group.logs.filter((log) => log.entryHit || log.status !== "NO_ENTRY" && log.status !== "EXPIRED").length, sampleSize);
+      const noEntryRate = pct(group.logs.filter((log) => log.status === "NO_ENTRY" || log.status === "EXPIRED").length, sampleSize);
+      const slRate = pct(group.logs.filter((log) => log.status === "SL_HIT").length, sampleSize);
+      const tp1Rate = pct(group.logs.filter((log) => log.status === "TP1_HIT" || log.status === "TP2_HIT" || log.status === "BE_HIT").length, sampleSize);
+      const tp2Rate = pct(group.logs.filter((log) => log.status === "TP2_HIT").length, sampleSize);
+      const avgMaxFavorableR = avg(group.logs.map((log) => log.maxFavorableR || Math.max(log.resultR, 0)));
+      const avgMaxAdverseR = avg(group.logs.map((log) => log.maxAdverseR || Math.min(log.resultR, 0)));
+
+      let bias: LearningBias = "NEUTRAL";
+      if (sampleSize >= 5 && winrate >= 58 && avgR > 0.15) bias = "GOOD";
+      if (sampleSize >= 5 && (winrate <= 42 || avgR < -0.1 || slRate >= 55)) bias = "WEAK";
+
+      return {
+        key,
+        label: group.label,
+        sampleSize,
+        winrate,
+        avgR: Math.round(avgR * 100) / 100,
+        entryHitRate,
+        noEntryRate,
+        slRate,
+        tp1Rate,
+        tp2Rate,
+        avgMaxFavorableR: Math.round(avgMaxFavorableR * 100) / 100,
+        avgMaxAdverseR: Math.round(avgMaxAdverseR * 100) / 100,
+        commonFailureReason: commonFailure(group.logs),
+        bias,
+      };
+    })
+    .sort((a, b) => b.sampleSize - a.sampleSize || b.avgR - a.avgR);
+}
+
+function learningAdjustmentForSignal(signal: Signal, stats: LearningStat[]) {
+  const related = [
+    stats.find((stat) => stat.key === `symbol:${signal.symbol}`),
+    stats.find((stat) => stat.key === `side:${signal.side}`),
+    stats.find((stat) => stat.key === `setup:${signal.setup}`),
+    stats.find((stat) => stat.key === `regime:${signal.regime}`),
+    stats.find((stat) => stat.key === `symbol-side:${signal.symbol}:${signal.side}`),
+    stats.find((stat) => stat.key === `symbol-setup:${signal.symbol}:${signal.setup}`),
+  ].filter((item): item is LearningStat => Boolean(item));
+
+  let scoreAdjustment = 0;
+  let entryAtrAdjustment = 0;
+  let tp2MultiplierAdjustment = 0;
+  let slMultiplierAdjustment = 0;
+  const notes: string[] = [];
+
+  for (const stat of related) {
+    if (stat.sampleSize < 5) continue;
+
+    const weight = stat.key.startsWith("symbol-side") || stat.key.startsWith("symbol-setup") ? 1.4 : 1;
+
+    if (stat.bias === "GOOD") {
+      scoreAdjustment += 3 * weight;
+      notes.push(`Learning tốt: ${stat.label} có ${stat.sampleSize} mẫu, winrate ${stat.winrate}%, avg ${stat.avgR}R.`);
+    }
+
+    if (stat.bias === "WEAK") {
+      scoreAdjustment -= 5 * weight;
+      notes.push(`Learning yếu: ${stat.label} có ${stat.sampleSize} mẫu, winrate ${stat.winrate}%, avg ${stat.avgR}R.`);
+    }
+
+    if (stat.noEntryRate >= 55 && stat.avgR >= 0) {
+      entryAtrAdjustment += 0.08 * weight;
+      notes.push(`Learning entry: ${stat.label} thường không khớp entry, kéo Entry tốt nhất gần giá hơn.`);
+    }
+
+    if (stat.slRate >= 50 && stat.entryHitRate >= 55) {
+      entryAtrAdjustment -= 0.1 * weight;
+      slMultiplierAdjustment += 0.05 * weight;
+      notes.push(`Learning entry/SL: ${stat.label} hay khớp rồi SL, chờ entry sâu hơn và nới SL nhẹ.`);
+    }
+
+    if (stat.tp1Rate >= 45 && stat.tp2Rate < 20) {
+      tp2MultiplierAdjustment -= 0.08 * weight;
+      notes.push(`Learning TP: ${stat.label} thường TP1 rồi yếu, TP2 nên thực tế hơn.`);
+    }
+  }
+
+  return {
+    scoreAdjustment: Math.max(-15, Math.min(8, Math.round(scoreAdjustment))),
+    entryAtrAdjustment: Math.max(-0.22, Math.min(0.18, entryAtrAdjustment)),
+    tp2MultiplierAdjustment: Math.max(-0.25, Math.min(0.1, tp2MultiplierAdjustment)),
+    slMultiplierAdjustment: Math.max(0, Math.min(0.18, slMultiplierAdjustment)),
+    notes: Array.from(new Set(notes)).slice(0, 4),
+  };
+}
+
+function applyLearningToSignal(signal: Signal, stats: LearningStat[]) {
+  const learning = learningAdjustmentForSignal(signal, stats);
+
+  if (
+    learning.scoreAdjustment === 0 &&
+    learning.entryAtrAdjustment === 0 &&
+    learning.tp2MultiplierAdjustment === 0 &&
+    learning.slMultiplierAdjustment === 0 &&
+    learning.notes.length === 0
+  ) {
+    return signal;
+  }
+
+  const direction = signal.side === "LONG" ? 1 : signal.side === "SHORT" ? -1 : 0;
+  const estimatedAtr = Math.abs(signal.bestEntry - signal.sl) / 1.05 || Math.abs(signal.tp1 - signal.bestEntry) / 1.4 || signal.bestEntry * 0.007;
+  const baseEntry = signal.bestEntry;
+  const newBestEntry = direction === 0 ? signal.bestEntry : signal.bestEntry + direction * estimatedAtr * learning.entryAtrAdjustment;
+  const entryShift = newBestEntry - baseEntry;
+  const newEntryLow = signal.entryLow + entryShift;
+  const newEntryHigh = signal.entryHigh + entryShift;
+  const slDistance = Math.abs(baseEntry - signal.sl) * (1 + learning.slMultiplierAdjustment);
+  const tp1Distance = Math.abs(signal.tp1 - baseEntry);
+  const tp2Distance = Math.abs(signal.tp2 - baseEntry) * (1 + learning.tp2MultiplierAdjustment);
+
+  const newSl = direction === 0 ? signal.sl : newBestEntry - direction * slDistance;
+  const newTp1 = direction === 0 ? signal.tp1 : newBestEntry + direction * tp1Distance;
+  const newTp2 = direction === 0 ? signal.tp2 : newBestEntry + direction * tp2Distance;
+  const rr = Math.abs(newTp2 - newBestEntry) / Math.max(Math.abs(newBestEntry - newSl), 1e-9);
+  const score = Math.max(0, Math.min(100, signal.score + learning.scoreAdjustment));
+  const grade: Grade =
+    score >= 85 ? "A+" : score >= 75 ? "A" : score >= 65 ? "B" : score >= 55 ? "C" : "NO_TRADE";
+
+  let action = signal.action;
+  if (grade === "NO_TRADE") action = "NO_TRADE";
+  else if (learning.scoreAdjustment <= -8 && action === "ENTRY_OK") action = "WAIT_PULLBACK";
+  else if (learning.scoreAdjustment >= 5 && (action === "WAIT_PULLBACK" || action === "WAIT_RETEST")) action = "ENTRY_OK";
+
+  return {
+    ...signal,
+    score,
+    grade,
+    action,
+    bestEntry: newBestEntry,
+    entryLow: newEntryLow,
+    entryHigh: newEntryHigh,
+    sl: newSl,
+    tp1: newTp1,
+    tp2: newTp2,
+    rr: Math.round(rr * 100) / 100,
+    reasons: learning.scoreAdjustment > 0 ? [...signal.reasons, ...learning.notes] : signal.reasons,
+    warnings: learning.scoreAdjustment < 0 || learning.entryAtrAdjustment || learning.tp2MultiplierAdjustment || learning.slMultiplierAdjustment ? [...signal.warnings, ...learning.notes] : signal.warnings,
+  };
+}
+
 function Badge({
   children,
   tone = "neutral",
@@ -892,6 +1272,7 @@ export default function App() {
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [forwardLogs, setForwardLogs] = useState<ForwardLog[]>([]);
+  const [learningStats, setLearningStats] = useState<LearningStat[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [apiStatus, setApiStatus] = useState("Chưa phân tích");
   const [syncStatus, setSyncStatus] = useState("Chỉ lưu máy này");
@@ -899,6 +1280,8 @@ export default function App() {
   const [showSql, setShowSql] = useState(false);
   const [showWorker, setShowWorker] = useState(false);
   const [journalNote, setJournalNote] = useState("");
+  const [showGuidebook, setShowGuidebook] = useState(false);
+  const [showUtilities, setShowUtilities] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
   useEffect(() => {
@@ -914,8 +1297,9 @@ export default function App() {
       });
     }
 
-    setSignals(saved.signals || []);
+    setSignals(keepLatestSignalPerSymbol(saved.signals || []));
     setForwardLogs(saved.forwardLogs || []);
+    setLearningStats(saved.learningStats || buildLearningStats(saved.signals || [], saved.forwardLogs || []));
     setAuditLogs(saved.auditLogs || []);
     setDarkMode(Boolean(saved.darkMode));
   }, []);
@@ -927,11 +1311,12 @@ export default function App() {
     nextDarkMode = darkMode
   ) {
     saveState({
-      signals: nextSignals,
+      signals: keepLatestSignalPerSymbol(nextSignals),
       forwardLogs: nextLogs,
       auditLogs: nextAudit,
       config,
       darkMode: nextDarkMode,
+      learningStats: buildLearningStats(keepLatestSignalPerSymbol(nextSignals), nextLogs),
       updatedAt: Date.now(),
     });
   }
@@ -946,21 +1331,27 @@ export default function App() {
     try {
       setApiStatus("Đang lấy dữ liệu...");
 
-      const btcCandles = await fetchCandles(config, "BTCUSDT", config.timeframe, 240);
+      const [btcCandles, symbolRules] = await Promise.all([
+        fetchCandles(config, "BTCUSDT", config.timeframe, 240),
+        fetchSymbolRules(config),
+      ]);
       const btcBias = inferBtcBias(btcCandles);
       const out: Signal[] = [];
 
       for (const symbol of SYMBOLS) {
         const candles = symbol === "BTCUSDT" ? btcCandles : await fetchCandles(config, symbol, config.timeframe, 240);
-        out.push(buildSignal(symbol, candles, btcBias, config));
+        out.push(buildSignal(symbol, candles, btcBias, config, symbolRules));
       }
 
-      const sorted = out.sort((a, b) => b.score - a.score);
+      const learningNow = buildLearningStats(signals, forwardLogs);
+      const learnedOut = out.map((signal) => applyLearningToSignal(signal, learningNow));
+      const sorted = keepLatestSignalPerSymbol(learnedOut);
+      setLearningStats(buildLearningStats(sorted, forwardLogs));
       const newAudit = [
         {
           id: `${Date.now()}`,
           at: Date.now(),
-          message: `Đã phân tích ${sorted.length} symbol qua ${config.dataSourceMode}`,
+          message: `Đã phân tích ${sorted.length} symbol qua ${config.dataSourceMode}. Ký quỹ được tính theo rule riêng từng symbol. Màn hình chính chỉ giữ 1 tín hiệu mới nhất cho mỗi symbol.`,
         },
         ...auditLogs,
       ].slice(0, 100);
@@ -983,16 +1374,16 @@ export default function App() {
     try {
       setApiStatus("Đang chạy Forward Test 1m...");
       const logs: ForwardLog[] = [];
-      const testedAt = Date.now();
-      const forwardRunId = `FT_${testedAt}`;
 
       for (const signal of signals.slice(0, 6)) {
         const candles1m = await fetchCandles(config, signal.symbol, "1m", 1000);
-        const log = executeRealForwardTest1m(signal, candles1m);
-        logs.push(ensureForwardLogMeta(log, forwardRunId, testedAt));
+        logs.push(executeRealForwardTest1m(signal, candles1m));
       }
 
-      const nextLogs = mergeForwardLogsKeepLatest(forwardLogs, logs);
+      const merged = new Map(forwardLogs.map((l) => [l.signalId, l]));
+      logs.forEach((l) => merged.set(l.signalId, l));
+
+      const nextLogs = Array.from(merged.values());
       const newAudit = [
         {
           id: `${Date.now()}`,
@@ -1002,7 +1393,9 @@ export default function App() {
         ...auditLogs,
       ].slice(0, 100);
 
+      const nextLearningStats = buildLearningStats(signals, nextLogs);
       setForwardLogs(nextLogs);
+      setLearningStats(nextLearningStats);
       setAuditLogs(newAudit);
       setApiStatus("Forward Test 1m hoàn tất");
       persist(signals, nextLogs, newAudit);
@@ -1028,7 +1421,7 @@ export default function App() {
       const logById = new Map<string, ForwardLog>();
       [...(remote.forwardLogs || []), ...forwardLogs].forEach((l) => logById.set(l.signalId, l));
 
-      const nextSignals = Array.from(byId.values()).sort((a, b) => b.score - a.score);
+      const nextSignals = keepLatestSignalPerSymbol(Array.from(byId.values()));
       const nextLogs = Array.from(logById.values());
       const nextAudit = [
         { id: `${Date.now()}`, at: Date.now(), message: "Đã kéo dữ liệu trước khi đẩy lên cloud" },
@@ -1046,14 +1439,100 @@ export default function App() {
         updatedAt: Date.now(),
       });
 
+      const nextLearningStats = buildLearningStats(nextSignals, nextLogs);
       setSignals(nextSignals);
       setForwardLogs(nextLogs);
+      setLearningStats(nextLearningStats);
       setAuditLogs(nextAudit);
       persist(nextSignals, nextLogs, nextAudit);
       setSyncStatus("Đã đồng bộ");
     } catch (err) {
       setSyncStatus(err instanceof Error ? `Lỗi đồng bộ: ${err.message}` : "Lỗi đồng bộ");
     }
+  }
+
+
+  async function clearForwardLogsCloud() {
+    try {
+      const confirmed = window.confirm(
+        "Xóa toàn bộ Forward Log trên cloud và trên máy này? Tín hiệu hiện tại sẽ được giữ lại."
+      );
+
+      if (!confirmed) return;
+
+      setSyncStatus("Đang xóa Forward Log cloud...");
+
+      if (config.supabaseUrl && config.supabaseAnonKey) {
+        const base = config.supabaseUrl.replace(/\/$/, "");
+        const res = await fetch(`${base}/rest/v1/fta_forward_logs?signal_id=not.is.null`, {
+          method: "DELETE",
+          headers: {
+            ...supabaseHeaders(config),
+            Prefer: "return=minimal",
+          },
+        });
+
+        if (!res.ok) {
+          throw new Error(`Lỗi xóa Forward Log Supabase: ${res.status}`);
+        }
+      }
+
+      const newAudit = [
+        {
+          id: `${Date.now()}`,
+          at: Date.now(),
+          message: "Đã xóa toàn bộ Forward Log trên cloud và local để tạo log mới.",
+        },
+        ...auditLogs,
+      ].slice(0, 100);
+
+      setForwardLogs([]);
+      setAuditLogs(newAudit);
+      persist(signals, [], newAudit);
+      setSyncStatus("Đã xóa Forward Log cloud/local");
+    } catch (err) {
+      setSyncStatus(err instanceof Error ? `Lỗi xóa log cloud: ${err.message}` : "Lỗi xóa log cloud");
+    }
+  }
+
+
+  function rebuildLearning() {
+    const stats = buildLearningStats(signals, forwardLogs);
+    const newAudit = [
+      {
+        id: `${Date.now()}`,
+        at: Date.now(),
+        message: `Đã rebuild Learning Engine từ ${forwardLogs.length} Forward Log.`,
+      },
+      ...auditLogs,
+    ].slice(0, 100);
+
+    setLearningStats(stats);
+    setAuditLogs(newAudit);
+    persist(signals, forwardLogs, newAudit);
+  }
+
+  function clearLearningStats() {
+    const newAudit = [
+      {
+        id: `${Date.now()}`,
+        at: Date.now(),
+        message: "Đã xóa Learning Stats. Forward Log gốc vẫn được giữ lại.",
+      },
+      ...auditLogs,
+    ].slice(0, 100);
+
+    setLearningStats([]);
+    setAuditLogs(newAudit);
+    saveState({
+      signals,
+      forwardLogs,
+      auditLogs: newAudit,
+      config,
+      darkMode,
+      learningStats: [],
+      updatedAt: Date.now(),
+    });
   }
 
   function addJournal() {
@@ -1082,6 +1561,7 @@ export default function App() {
     ];
 
     setForwardLogs([]);
+    setLearningStats([]);
     setAuditLogs(newAudit);
     persist(signals, [], newAudit);
   }
@@ -1090,26 +1570,50 @@ export default function App() {
     localStorage.removeItem(LOCAL_KEY);
     setSignals([]);
     setForwardLogs([]);
+    setLearningStats([]);
     setAuditLogs([]);
     setSyncStatus("Chỉ lưu máy này");
     setApiStatus("Chưa phân tích");
   }
 
   const filtered = signals.filter((s) => {
-    if (filter === "ENTRY") return s.action === "ENTRY_OK";
-    if (filter === "WAIT") return s.action === "WAIT_PULLBACK" || s.action === "WAIT_RETEST";
-    if (filter === "RISK") return ["HIGH_RISK", "BAD_RR", "AVOID", "NO_TRADE"].includes(s.action);
+    const log = forwardLogs.find((l) => l.signalId === s.id);
+
+    if (filter === "ENTRY") {
+      return s.action === "ENTRY_OK" && (!log || !isTerminalForwardStatus(log.status));
+    }
+
+    if (filter === "WAIT") {
+      return (s.action === "WAIT_PULLBACK" || s.action === "WAIT_RETEST") && (!log || !isTerminalForwardStatus(log.status));
+    }
+
+    if (filter === "RISK") {
+      return ["HIGH_RISK", "BAD_RR", "AVOID", "NO_TRADE"].includes(s.action) || Boolean(log && isTerminalForwardStatus(log.status));
+    }
+
     return true;
   });
 
-  const tradeable = signals.filter((s) => s.action === "ENTRY_OK").length;
-  const waiting = signals.filter((s) => s.action === "WAIT_PULLBACK" || s.action === "WAIT_RETEST").length;
-  const risky = signals.filter((s) => ["HIGH_RISK", "BAD_RR", "AVOID"].includes(s.action)).length;
+  const tradeable = signals.filter((s) => {
+    const log = forwardLogs.find((l) => l.signalId === s.id);
+    return s.action === "ENTRY_OK" && (!log || !isTerminalForwardStatus(log.status));
+  }).length;
 
+  const waiting = signals.filter((s) => {
+    const log = forwardLogs.find((l) => l.signalId === s.id);
+    return (s.action === "WAIT_PULLBACK" || s.action === "WAIT_RETEST") && (!log || !isTerminalForwardStatus(log.status));
+  }).length;
+
+  const risky = signals.filter((s) => {
+    const log = forwardLogs.find((l) => l.signalId === s.id);
+    return ["HIGH_RISK", "BAD_RR", "AVOID"].includes(s.action) || Boolean(log && isTerminalForwardStatus(log.status));
+  }).length;
+
+  
   return (
     <div className={darkMode ? "app dark" : "app"}>
       <header className="top">
-        <div>
+        <div className="heroBlock">
           <h1>Trợ lý Giao dịch Futures v4</h1>
           <p>Hỗ trợ quyết định trade futures thủ công · Không grid bot · Dữ liệu qua Worker Proxy · Đồng bộ Supabase</p>
         </div>
@@ -1146,7 +1650,22 @@ export default function App() {
         </Panel>
       </section>
 
-      <Panel>
+      <Panel className="controlPanel">
+        <div className="sectionHeader">
+          <div>
+            <h2>Cấu hình & thao tác</h2>
+            <p className="muted">Giữ các thao tác thường dùng ở khu vực chính. Tiện ích ít dùng được gom vào phần mở rộng để giao diện gọn hơn.</p>
+          </div>
+          <div className="headerActions">
+            <button className="secondary smallBtn" onClick={() => setShowGuidebook(!showGuidebook)}>
+              {showGuidebook ? "Ẩn Guidebook" : "Mở Guidebook"}
+            </button>
+            <button className="secondary smallBtn" onClick={() => setShowUtilities(!showUtilities)}>
+              {showUtilities ? "Ẩn tiện ích" : "Tiện ích & dữ liệu"}
+            </button>
+          </div>
+        </div>
+
         <div className="configGrid">
           <label>
             Vốn USDT
@@ -1194,7 +1713,7 @@ export default function App() {
           <input value={config.workerProxyUrl} onChange={(e) => setConfig({ ...config, workerProxyUrl: e.target.value })} />
         </label>
 
-        <div className="actions">
+        <div className="primaryActions">
           <button onClick={analyze}>Phân tích</button>
           <button className="secondary" onClick={runForwardTest}>
             Chạy Forward Test 1m
@@ -1202,13 +1721,57 @@ export default function App() {
           <button className="secondary" onClick={syncCloud}>
             Đồng bộ Supabase
           </button>
-          <button className="dangerBtn" onClick={clearLogs}>
-            Xóa log
-          </button>
-          <button className="dangerBtn soft" onClick={clearAllLocalData}>
-            Xóa toàn bộ local
+          <button className="secondary" onClick={rebuildLearning}>
+            Rebuild Learning
           </button>
         </div>
+
+        {showUtilities && (
+          <div className="utilityPanel">
+            <div className="utilityGroup">
+              <div className="utilityTitle">Quản lý log & dữ liệu</div>
+              <div className="utilityButtons">
+                <button className="dangerBtn" onClick={clearLogs}>
+                  Xóa log local
+                </button>
+                <button className="dangerBtn cloud" onClick={clearForwardLogsCloud}>
+                  Xóa Forward Log cloud
+                </button>
+                <button className="secondary" onClick={clearLearningStats}>
+                  Xóa Learning
+                </button>
+                <button className="dangerBtn soft" onClick={clearAllLocalData}>
+                  Xóa toàn bộ local
+                </button>
+              </div>
+            </div>
+
+            <div className="utilityGroup">
+              <div className="utilityTitle">Triển khai & cấu hình</div>
+              <div className="utilityButtons">
+                <button className="secondary" onClick={() => setShowSql(!showSql)}>
+                  {showSql ? "Ẩn SQL" : "Hiện SQL Supabase"}
+                </button>
+                <button className="secondary" onClick={() => navigator.clipboard.writeText([SCHEMA_SQL, RLS_SQL].join(String.fromCharCode(10, 10)))}>
+                  Copy SQL
+                </button>
+                <button className="secondary" onClick={() => setShowWorker(!showWorker)}>
+                  {showWorker ? "Ẩn Worker" : "Hiện Worker Proxy"}
+                </button>
+                <button className="secondary" onClick={() => navigator.clipboard.writeText(WORKER_CODE)}>
+                  Copy Worker
+                </button>
+              </div>
+            </div>
+
+            {(showSql || showWorker) && (
+              <div className="utilityDocs">
+                {showSql && <pre>{[SCHEMA_SQL, RLS_SQL].join(String.fromCharCode(10, 10))}</pre>}
+                {showWorker && <pre>{WORKER_CODE}</pre>}
+              </div>
+            )}
+          </div>
+        )}
       </Panel>
 
       <div className="filters">
@@ -1219,149 +1782,192 @@ export default function App() {
         ))}
       </div>
 
-      <section className="signals">
-        {filtered.map((s) => {
-          const log = forwardLogs.find((l) => l.signalId === s.id);
+      <div className="mainLayout">
+        <section className="mainColumn">
+          <section className="signals">
+            {filtered.map((s) => {
+              const log = forwardLogs.find((l) => l.signalId === s.id);
+              const orderWarnings = orderCompatibilityWarnings(s);
 
-          return (
-            <Panel key={s.id} className="signal">
-              <div className="signalHead">
-                <div>
-                  <h2 className="symbolLink" onClick={() => openBinanceFutures(s.symbol)} title="Mở trên Binance Futures">
-                    {s.symbol}
-                  </h2>
-                  <div className="muted">
-                    {s.setup} · {viRegime(s.regime)} · Điểm {s.score}/100
-                  </div>
-                </div>
-
-                <div className="badges">
-                  <Badge tone={s.side === "LONG" ? "green" : s.side === "SHORT" ? "red" : "neutral"}>
-                    {s.side === "LONG" ? "LONG / MUA" : s.side === "SHORT" ? "SHORT / BÁN" : "TRUNG LẬP"}
-                  </Badge>
-                  <Badge tone={s.grade === "A+" ? "purple" : s.grade === "A" ? "green" : s.grade === "B" ? "blue" : "yellow"}>
-                    {s.grade}
-                  </Badge>
-                  <Badge tone={s.action === "ENTRY_OK" ? "green" : s.action === "HIGH_RISK" || s.action === "BAD_RR" || s.action === "AVOID" ? "red" : "yellow"}>
-                    {viAction(s.action)}
-                  </Badge>
-                </div>
-              </div>
-
-              <div className="priceGrid">
-                <div>
-                  <span>Vùng Entry</span>
-                  <b>
-                    {fmt(s.entryLow)} - {fmt(s.entryHigh)}
-                  </b>
-                </div>
-                <div>
-                  <span>Entry tốt nhất</span>
-                  <b>{fmt(s.bestEntry)}</b>
-                </div>
-                <div>
-                  <span>SL</span>
-                  <b className="redText">{fmt(s.sl)}</b>
-                </div>
-                <div>
-                  <span>TP1 / TP2</span>
-                  <b className="greenText">
-                    {fmt(s.tp1)} / {fmt(s.tp2)}
-                  </b>
-                </div>
-              </div>
-
-              <div className="miniGrid">
-                <div>
-                  Đòn bẩy <b>x{s.leverage}</b>
-                </div>
-                <div>
-                  Ký quỹ <b>{s.margin}</b>
-                </div>
-                <div>
-                  Rủi ro <b>{s.riskUsdt}</b>
-                </div>
-                <div>
-                  RR <b>{s.rr}</b>
-                </div>
-              </div>
-
-              <div className="notes">
-                {s.reasons.map((r, i) => (
-                  <p key={i}>• {r}</p>
-                ))}
-                {s.warnings.map((w, i) => (
-                  <p key={i} className="warn">
-                    ⚠ {w}
-                  </p>
-                ))}
-                {s.blocks.map((b, i) => (
-                  <p key={i} className="danger">
-                    ⛔ Bị chặn: {b}
-                  </p>
-                ))}
-              </div>
-
-              {log && (
-                <div className="log">
-                  <b>
-                    Forward Test: {viStatus(log.status)} · {log.resultR}R
-                  </b>
-                  {log.replay.map((line, i) => (
-                    <div key={i}>
-                      {i + 1}. {line}
+              return (
+                <Panel key={s.id} className="signal">
+                  <div className="signalHead">
+                    <div>
+                      <h2 className="symbolLink" onClick={() => openBinanceFutures(s.symbol)} title="Mở trên Binance Futures">
+                        {s.symbol}
+                      </h2>
+                      <div className="muted">
+                        {s.setup} · {viRegime(s.regime)} · Điểm {s.score}/100
+                      </div>
                     </div>
-                  ))}
-                </div>
-              )}
+
+                    <div className="badges">
+                      <Badge tone={s.side === "LONG" ? "green" : s.side === "SHORT" ? "red" : "neutral"}>
+                        {s.side === "LONG" ? "LONG / MUA" : s.side === "SHORT" ? "SHORT / BÁN" : "TRUNG LẬP"}
+                      </Badge>
+                      <Badge tone={s.grade === "A+" ? "purple" : s.grade === "A" ? "green" : s.grade === "B" ? "blue" : "yellow"}>
+                        {s.grade}
+                      </Badge>
+                      <Badge tone={displayActionTone(s, log)}>{displayAction(s, log)}</Badge>
+                    </div>
+                  </div>
+
+                  <div className="priceGrid">
+                    <div>
+                      <span>Vùng Entry</span>
+                      <b>
+                        {fmt(s.entryLow)} - {fmt(s.entryHigh)}
+                      </b>
+                    </div>
+                    <div>
+                      <span>Entry tốt nhất</span>
+                      <b>{fmt(s.bestEntry)}</b>
+                    </div>
+                    <div>
+                      <span>SL</span>
+                      <b className="redText">{fmt(s.sl)}</b>
+                    </div>
+                    <div>
+                      <span>TP1 / TP2</span>
+                      <b className="greenText">
+                        {fmt(s.tp1)} / {fmt(s.tp2)}
+                      </b>
+                    </div>
+                  </div>
+
+                  <div className="miniGrid">
+                    <div>
+                      Đòn bẩy <b>x{s.leverage}</b>
+                    </div>
+                    <div>
+                      Ký quỹ <b>{s.margin}</b>
+                    </div>
+                    <div>
+                      Rủi ro <b>{s.riskUsdt}</b>
+                    </div>
+                    <div>
+                      RR <b>{s.rr}</b>
+                    </div>
+                  </div>
+
+                  {orderWarnings.length > 0 && (
+                    <div className="log danger">
+                      {orderWarnings.map((warning, index) => (
+                        <div key={index}>⚠ {warning}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="notes">
+                    {s.reasons.map((r, i) => (
+                      <p key={i}>• {r}</p>
+                    ))}
+                    {s.warnings.map((w, i) => (
+                      <p key={i} className="warn">
+                        ⚠ {w}
+                      </p>
+                    ))}
+                    {s.blocks.map((b, i) => (
+                      <p key={i} className="danger">
+                        ⛔ Bị chặn: {b}
+                      </p>
+                    ))}
+                  </div>
+
+                  {log && (
+                    <div className="log">
+                      <b>
+                        Forward Test: {viStatus(log.status)} · {log.resultR}R · Entry tính theo Entry tốt nhất
+                      </b>
+                      {log.replay.map((line, i) => (
+                        <div key={i}>
+                          {i + 1}. {line}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Panel>
+              );
+            })}
+          </section>
+        </section>
+
+        <aside className="sideColumn">
+          <Panel>
+            <div className="sectionHeader">
+              <div>
+                <h2>Learning Dashboard</h2>
+                <p className="muted">Theo dõi các nhóm symbol/setup/regime đang mạnh hay yếu để tool học dần từ Forward Log.</p>
+              </div>
+            </div>
+            {learningStats.length === 0 && <div className="muted">Chưa có Learning Stats. Hãy chạy Forward Test 1m rồi bấm Rebuild Learning.</div>}
+            {learningStats.length > 0 && (
+              <div className="learningGrid compact">
+                {learningStats.slice(0, 6).map((stat) => (
+                  <div key={stat.key} className="learningCard">
+                    <div className="learningTop">
+                      <b>{stat.label}</b>
+                      <Badge tone={stat.bias === "GOOD" ? "green" : stat.bias === "WEAK" ? "red" : "neutral"}>{stat.bias}</Badge>
+                    </div>
+                    <div className="learningStats">
+                      <span>Mẫu: <b>{stat.sampleSize}</b></span>
+                      <span>Win: <b>{stat.winrate}%</b></span>
+                      <span>Avg R: <b>{stat.avgR}</b></span>
+                      <span>Entry: <b>{stat.entryHitRate}%</b></span>
+                      <span>SL: <b>{stat.slRate}%</b></span>
+                      <span>TP2: <b>{stat.tp2Rate}%</b></span>
+                    </div>
+                    {stat.commonFailureReason && <div className="muted">Lỗi thường gặp: {stat.commonFailureReason}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+
+          {showGuidebook && (
+            <Panel>
+              <h2>Guidebook nhanh</h2>
+              <div className="guidebook">
+                <h3>Quy trình dùng chuẩn</h3>
+                <ol>
+                  <li>Đồng bộ Supabase khi vừa đổi thiết bị.</li>
+                  <li>Kiểm tra vốn, rủi ro, số lệnh tối đa và nguồn dữ liệu.</li>
+                  <li>Phân tích tín hiệu mới.</li>
+                  <li>Chạy Forward Test 1m.</li>
+                  <li>Rebuild Learning.</li>
+                  <li>Đồng bộ lại Supabase.</li>
+                </ol>
+                <h3>Nguyên tắc quan trọng</h3>
+                <p>Forward Test chỉ tính khớp lệnh khi giá chạm Entry tốt nhất. Learning Engine chỉ điều chỉnh rõ khi có tối thiểu 5 mẫu để tránh overfit.</p>
+              </div>
             </Panel>
-          );
-        })}
-      </section>
+          )}
 
-      <Panel>
-        <h2>Nhật ký lệnh thật</h2>
-        <div className="journal">
-          <input
-            placeholder="Ghi chú lệnh thật / tâm lý / lý do vào lệnh..."
-            value={journalNote}
-            onChange={(e) => setJournalNote(e.target.value)}
-          />
-          <button onClick={addJournal}>Thêm ghi chú</button>
-        </div>
-      </Panel>
+          <Panel>
+            <h2>Nhật ký lệnh thật</h2>
+            <div className="journal">
+              <input
+                placeholder="Ghi chú lệnh thật / tâm lý / lý do vào lệnh..."
+                value={journalNote}
+                onChange={(e) => setJournalNote(e.target.value)}
+              />
+              <button onClick={addJournal}>Thêm ghi chú</button>
+            </div>
+          </Panel>
 
-      <Panel>
-        <h2>Nhật ký hệ thống</h2>
-        {auditLogs.slice(0, 8).map((l) => (
-          <div key={l.id} className="audit">
-            <span>{l.message}</span>
-            <span>{time(l.at)}</span>
-          </div>
-        ))}
-        {!auditLogs.length && <div className="muted">Chưa có sự kiện hệ thống.</div>}
-      </Panel>
-
-      <Panel>
-        <h2>SQL và Worker triển khai</h2>
-        <div className="actions">
-          <button className="secondary" onClick={() => setShowSql(!showSql)}>
-            {showSql ? "Ẩn SQL" : "Hiện SQL Supabase"}
-          </button>
-          <button className="secondary" onClick={() => navigator.clipboard.writeText([SCHEMA_SQL, RLS_SQL].join(String.fromCharCode(10, 10)))}>
-            Copy SQL
-          </button>
-          <button className="secondary" onClick={() => setShowWorker(!showWorker)}>
-            {showWorker ? "Ẩn Worker" : "Hiện Worker Proxy"}
-          </button>
-          <button className="secondary" onClick={() => navigator.clipboard.writeText(WORKER_CODE)}>
-            Copy Worker
-          </button>
-        </div>
-
-        {showSql && <pre>{[SCHEMA_SQL, RLS_SQL].join(String.fromCharCode(10, 10))}</pre>}
-        {showWorker && <pre>{WORKER_CODE}</pre>}
-      </Panel>
+          <Panel>
+            <h2>Nhật ký hệ thống</h2>
+            {auditLogs.slice(0, 8).map((l) => (
+              <div key={l.id} className="audit">
+                <span>{l.message}</span>
+                <span>{time(l.at)}</span>
+              </div>
+            ))}
+            {!auditLogs.length && <div className="muted">Chưa có sự kiện hệ thống.</div>}
+          </Panel>
+        </aside>
+      </div>
     </div>
   );
 }
+
