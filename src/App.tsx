@@ -1752,9 +1752,7 @@ export default function App() {
                 <button className="secondary" onClick={() => setShowSql(!showSql)}>
                   {showSql ? "Ẩn SQL" : "Hiện SQL Supabase"}
                 </button>
-                <button className="secondary" onClick={() => navigator.clipboard.writeText(SCHEMA_SQL + "
-
-" + RLS_SQL)}>
+                <button className="secondary" onClick={() => navigator.clipboard.writeText(SCHEMA_SQL + "\n\n" + RLS_SQL)}>
                   Copy SQL
                 </button>
                 <button className="secondary" onClick={() => setShowWorker(!showWorker)}>
