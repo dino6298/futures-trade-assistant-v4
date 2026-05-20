@@ -1002,3 +1002,9 @@ body:has(.app.dark) {
     grid-template-columns: 1fr;
   }
 }
+
+.forwardTestHint {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}

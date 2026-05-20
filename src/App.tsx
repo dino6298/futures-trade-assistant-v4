@@ -457,10 +457,25 @@ function getScanSymbols(config: AppConfig) {
   return CORE_SYMBOLS;
 }
 
+function uniqueSignalsById(inputSignals: Signal[]) {
+  const map = new Map<string, Signal>();
+
+  for (const signal of inputSignals) {
+    if (!signal?.id) continue;
+    map.set(signal.id, signal);
+  }
+
+  return Array.from(map.values()).sort((a, b) => b.signalTime - a.signalTime || b.score - a.score);
+}
+
 function getForwardTestSignals(signals: Signal[], limit: number) {
-  const uniqueSignals = keepLatestSignalPerSymbol(signals);
-  if (limit <= 0) return uniqueSignals;
-  return uniqueSignals.slice(0, limit);
+  const allSavedSignals = uniqueSignalsById(signals);
+
+  if (limit <= 0) {
+    return allSavedSignals;
+  }
+
+  return keepLatestSignalPerSymbol(signals).slice(0, limit);
 }
 
 function basePrice(symbol: string) {
@@ -1763,7 +1778,7 @@ export default function App() {
         {
           id: `${Date.now()}`,
           at: Date.now(),
-          message: `Đã chạy Forward Test thật bằng nến 1m cho ${logs.length}/${getForwardTestSignals(signals, config.forwardTestLimit).length} tín hiệu${forwardFailures.length ? `. Bỏ qua ${forwardFailures.length} symbol lỗi.` : ""}`,
+          message: `Đã chạy Forward Test thật bằng nến 1m cho ${logs.length}/${getForwardTestSignals(signals, config.forwardTestLimit).length} tín hiệu ${config.forwardTestLimit === 0 ? "đã lưu" : "được chọn"}${forwardFailures.length ? `. Bỏ qua ${forwardFailures.length} symbol lỗi.` : ""}`,
         },
         ...auditLogs,
       ].slice(0, 100);
@@ -2099,7 +2114,7 @@ export default function App() {
               <option value={6}>Top 6</option>
               <option value={10}>Top 10</option>
               <option value={20}>Top 20</option>
-              <option value={0}>Toàn bộ đang hiển thị</option>
+              <option value={0}>Tất cả tín hiệu đã lưu</option>
             </select>
           </label>
         </div>
@@ -2164,7 +2179,7 @@ export default function App() {
           ) : (
             <>
               Đang quét <b>{getScanSymbols(config).length}</b> symbol · Forward Test:{" "}
-              <b>{config.forwardTestLimit === 0 ? "toàn bộ" : `top ${config.forwardTestLimit}`}</b>
+              <b>{config.forwardTestLimit === 0 ? "tất cả tín hiệu đã lưu" : `top ${config.forwardTestLimit}`}</b>
             </>
           )}
         </div>
@@ -2356,7 +2371,7 @@ export default function App() {
                 <p className="muted">Theo dõi các nhóm symbol/setup/regime đang mạnh hay yếu để tool học dần từ Forward Log.</p>
               </div>
             </div>
-            {learningStats.length === 0 && <div className="muted">Chưa có Learning Stats. Hãy chạy Forward Test 1m rồi bấm Rebuild Learning.</div>}
+            {learningStats.length === 0 && <div className="muted">Chưa có Learning Stats. Hãy chạy Forward Test 1m cho tất cả tín hiệu đã lưu rồi bấm Rebuild Learning.</div>}
             {learningStats.length > 0 && (
               <div className="learningGrid compact">
                 {learningStats.slice(0, 6).map((stat) => (
