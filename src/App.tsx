@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 type Side = "LONG" | "SHORT" | "NEUTRAL";
 type RiskMode = "SAFE" | "NORMAL" | "AGGRESSIVE";
@@ -1113,7 +1113,14 @@ export default function App() {
   }
 
   function triggerImportBackup() {
-    importBackupInputRef.current?.click();
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json";
+    input.onchange = () => {
+      importBackupJson(input.files?.[0] || null);
+      input.remove();
+    };
+    input.click();
   }
 
   async function importBackupJson(file: File | null) {
@@ -1168,9 +1175,7 @@ export default function App() {
       const msg = err instanceof Error ? err.message : "Lỗi import backup";
       setSyncStatus(`Lỗi import backup: ${msg}`);
     } finally {
-      if (importBackupInputRef.current) {
-        importBackupInputRef.current.value = "";
-      }
+      // Không cần reset input vì input import được tạo động mỗi lần bấm.
     }
   }
 
@@ -1226,13 +1231,6 @@ export default function App() {
 
   return (
     <div className={darkMode ? "app dark" : "app"}>
-      <input
-        ref={importBackupInputRef}
-        type="file"
-        accept="application/json"
-        className="hiddenFileInput"
-        onChange={(event) => importBackupJson(event.target.files?.[0] || null)}
-      />
       <header className="top">
         <div>
           <h1>Trợ lý Giao dịch Futures v4</h1>
